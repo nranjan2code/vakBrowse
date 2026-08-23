@@ -35,10 +35,12 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
    docker run --rm -it --platform linux/amd64 -v "$PWD":/src -w /src \
      rust:1-bookworm bash -c "cargo test --workspace"
    ```
-6. **CI runs can fail instantly with a billing annotation** ("recent account
-   payments have failed or your spending limit needs to be increased").
-   That is account-level (private repos meter Actions minutes), not code —
-   check github.com/settings/billing, then `gh run rerun <id>`.
+6. **GitHub Actions is intentionally disabled** for this repo (private
+   account hit metered-minutes billing limits; workflows were removed in
+   commit history — restore from git if that changes). Verification is
+   LOCAL: `cargo test --workspace` + `cargo clippy --workspace --tests`
+   plus the linux-container recipe below. Do not push workflow files
+   under `.github/` unless asked.
 7. **URL policy gate.** Every navigation passes `validate_url`
    (http/https/file/about/data only). Extend deliberately.
 8. **Token efficiency is a feature.** Perception output targets <500 tokens
@@ -185,7 +187,7 @@ bins/
 | P2 | `vakd` daemon (UDS) + `vak` CLI + `vak-mcp` MCP server (rmcp), policy allowlist | **done** |
 | P3 | REST/WS API (`vakd-rest`), FFI cdylib (Python ctypes verified), Dockerfile w/ baked engine | **done** |
 | P4 | Stealth module, session pooling, vision fallback, WebMCP surfacing | **done** |
-| P5 | Multi-tab sessions, cross-frame (iframe) perception & clicks, CI (ubuntu/macos) | **done** |
+| P5 | Multi-tab sessions, cross-frame (iframe) perception & clicks; CI built then disabled (billing) | **done** |
 | P6 | Real-web dogfooding fixes (snapshot self-heal, fill-focuses, history) + per-session stealth/proxy + `extract` action + release workflow | **done** |
 
 Post-roadmap ideas (not committed): pip/npm packaging of the FFI,

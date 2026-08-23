@@ -1,7 +1,5 @@
 # vakBrowse
 
-[![CI](https://github.com/nranjan2code/vakBrowse/actions/workflows/ci.yml/badge.svg)](https://github.com/nranjan2code/vakBrowse/actions/workflows/ci.yml)
-
 An agent-native browser: a Rust core that gives AI agents a real, scriptable
 web browser. Humans are optional.
 
@@ -42,14 +40,14 @@ capability once, all five surfaces get it.
   pointer paths, vision fallback (`shot`/`click-at`, MCP returns real
   images), session pooling (caps + idle reaper), WebMCP surfacing.
 - **Depth (P5)** — multi-tab sessions, cross-frame (iframe) perception &
-  clicks, CI on ubuntu/macos.
+  clicks.
 - **Battle-tested (P6)** — dogfooded live against Wikipedia / Hacker News /
   GitHub / Bing / DuckDuckGo; fixed snapshot URL self-healing,
   fill-now-focuses (Enter submits), history actions; per-session
   `--stealth` and `--proxy`; `extract` action returning clean readable
   article text; tagged releases shipping binaries.
 
-45 tests green, clippy clean. Hardened for CI reality: launch args verified
+45 tests green, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing works,
 DuckDuckGo CAPTCHAs automation regardless of fingerprint (their detection
