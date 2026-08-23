@@ -14,10 +14,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, target: aarch64-apple-darwin }
-          - { os: macos-13, target: x86_64-apple-darwin }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # Intel macs: cross-compile from the arm64 runner.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,17 +34,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }} \
-              -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse-mcp
+        run: |
+          set -euxo pipefail
+          cargo build --release --target "${{ matrix.target }}" \
+            -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse-mcp
+
+      - name: Engine probe (bakes pinned chrome-headless-shell)
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: |
+          ./target/${{ matrix.target }}/release/vakd doctor --no-probe
 
       - name: Package
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-          DIR="vakBrowse-${VERSION}-${{ matrix.target }}"
+          set -euxo pipefail
+          DIR="vakBrowse-${VERSION}-${TARGET}"
           mkdir -p "$DIR"
           for bin in vakd vak vak-mcp vakd-rest; do
-            cp "target/${{ matrix.target }}/release/$bin" "$DIR/"
+            cp "target/${TARGET}/release/$bin" "$DIR/"
           done
           cp README.md LICENSE AGENTS.md "$DIR/"
           tar czf "$DIR.tar.gz" "$DIR"
