@@ -30,6 +30,10 @@ enum Command {
         /// Show the browser window (default: headless).
         #[arg(long)]
         headed: bool,
+        /// Launch with a stealth fingerprint (seed defaults to the profile
+        /// id or "default").
+        #[arg(long)]
+        stealth: bool,
     },
     /// Close a session.
     Close { session: String },
@@ -131,11 +135,14 @@ async fn main() {
 
 fn to_request(cmd: Command) -> Result<Request, String> {
     Ok(match cmd {
-        Command::Open { url, profile, headed } => Request::Open {
+        Command::Open { url, profile, headed, stealth } => Request::Open {
             options: SessionOptions {
-                profile: profile.map(vakbrowse_core::ProfileId::new),
+                profile: profile.clone().map(vakbrowse_core::ProfileId::new),
                 headless: !headed,
                 url,
+                stealth_seed: stealth.then(|| {
+                    profile.unwrap_or_else(|| "default".to_string())
+                }),
             },
         },
         Command::Close { session } => Request::Close {

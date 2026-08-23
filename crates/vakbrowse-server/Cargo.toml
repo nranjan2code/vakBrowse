@@ -8,6 +8,7 @@ license-file.workspace = true
 [dependencies]
 vakbrowse-core = { workspace = true }
 vakbrowse-engine = { workspace = true }
+vakbrowse-stealth = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

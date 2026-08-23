@@ -45,7 +45,9 @@ stealth, session pooling, vision fallback, WebMCP (P4).
 
 Dogfooded live against Wikipedia / Hacker News / GitHub / DuckDuckGo;
 three real bugs found and fixed (snapshot URL self-healing after
-click-navigation, fill now focuses so Enter submits, history actions).
+click-navigation, fill now focuses so Enter submits, history actions),
+plus per-session stealth (`--stealth`) and honest bot-wall findings
+(Bing OK, DuckDuckGo CAPTCHAs automation regardless of fingerprint).
 42 tests green, clippy clean. See `AGENTS.md` for
 the full map and post-roadmap ideas.
 

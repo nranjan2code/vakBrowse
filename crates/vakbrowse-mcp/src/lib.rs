@@ -48,6 +48,7 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                     ("url", json!({"type": "string", "description": "initial URL"})),
                     ("profile", json!({"type": "string", "description": "persistent profile id; keeps cookies across calls"})),
                     ("headed", json!({"type": "boolean", "description": "show window (default false)"})),
+                    ("stealth", json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"})),
                 ],
                 &[],
             ),
@@ -306,6 +307,10 @@ impl VakMcp {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                     url: arg(args, "url").and_then(|v| v.as_str()).map(String::from),
+                    stealth_seed: arg(args, "stealth")
+                        .and_then(|v| v.as_bool())
+                        .filter(|b| *b)
+                        .map(|_| "mcp".to_string()),
                 },
             },
             "browser_close" => Request::Close {

@@ -2574,6 +2574,7 @@ dependencies = [
  "url",
  "vakbrowse-core",
  "vakbrowse-engine",
+ "vakbrowse-stealth",
 ]
 
 [[package]]

@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use url::Url;
 use vakbrowse_core::{ProfileId, SessionId};
-use vakbrowse_server::{Action, ActionResult, Policy, Request, ResponsePayload, SessionManager, SessionOptions};
+use vakbrowse_server::{
+    Action, ActionResult, Policy, Request, ResponsePayload, SessionManager, SessionOptions,
+};
 
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -146,3 +148,39 @@ async fn persistent_profile_reuses_dir() {
     );
     manager.close(&info.id).await.unwrap();
 }
+
+#[tokio::test]
+async fn stealth_seed_patches_navigator_through_manager() {
+    use std::path::PathBuf;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/hello.html");
+    let url = url::Url::from_file_path(path.canonicalize().unwrap())
+        .unwrap()
+        .to_string();
+
+    let manager = SessionManager::default();
+    let opened = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(url),
+                stealth_seed: Some("dogfood".into()),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap();
+    let session = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+    let _ = manager.act(&session, Action::Snapshot).await;
+    let r = manager
+        .act(&session, Action::EvalText { expression: "String(navigator.webdriver)".into() })
+        .await
+        .unwrap();
+    assert!(
+        matches!(&r, ActionResult::Text { text } if text == "false"),
+        "webdriver must be patched through the server path, got {r:?}"
+    );
+}
+

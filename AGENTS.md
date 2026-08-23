@@ -130,10 +130,15 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
 - History actions (`back`/`forward`/`reload`) wait for navigation and
   tolerate the old execution context dying mid-reload.
-- Dogfood findings (real web): Wikipedia/HN/GitHub flows work end-to-end;
-  DuckDuckGo serves an anti-bot JS shell to non-stealth headless Chrome —
-  use stealth profiles for bot-walled sites. Follow-up: expose per-session
-  stealth via SessionOptions/CLI flag.
+- Dogfood findings (real web): Wikipedia/HN/GitHub/Bing flows work
+  end-to-end. DuckDuckGo hard-walls automation (CAPTCHA on html endpoint,
+  empty JS shell on main) even WITH a stealth profile — their detection is
+  TLS/behavioral, not webdriver-level. Agent recipe: prefer Bing for search
+  flows. Per-session stealth ships as `SessionOptions.stealth_seed`
+  (`vak open --stealth`, `browser_open {stealth:true}`); it defeats
+  webdriver/plugin/pointer tells but not TLS-fingerprint walls.
+- Follow-up idea: proxy-per-profile support would address IP-reputation
+  walls like DDG's.
 - Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
   per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
   `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the

@@ -30,6 +30,11 @@ pub struct SessionOptions {
     pub headless: bool,
     #[serde(default)]
     pub url: Option<String>,
+    /// When set, launch with a deterministic stealth fingerprint derived
+    /// from this seed (defeats navigator.webdriver exposure, missing
+    /// language/plugin data, robotic pointer teleports).
+    #[serde(default)]
+    pub stealth_seed: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -42,6 +47,7 @@ impl Default for SessionOptions {
             profile: None,
             headless: true,
             url: None,
+            stealth_seed: None,
         }
     }
 }
@@ -289,6 +295,10 @@ impl SessionManager {
         }
         let mut launch = LaunchOptions {
             headless: options.headless,
+            stealth: options
+                .stealth_seed
+                .as_deref()
+                .map(vakbrowse_stealth::StealthProfile::generate),
             ..LaunchOptions::default()
         };
         if let Some(profile) = &options.profile {
