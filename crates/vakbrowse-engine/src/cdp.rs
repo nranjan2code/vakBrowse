@@ -185,8 +185,33 @@ impl EngineLauncher for CdpLauncher {
             builder = push_arg(builder, arg);
         }
 
-        let config = builder.build().map_err(proto_err)?;
-        let (browser, mut handler) = Browser::launch(config).await.map_err(proto_err)?;
+        let config = builder.clone().build().map_err(proto_err)?;
+        let launched = Browser::launch(config).await;
+        let (browser, mut handler) = match launched {
+            Ok(ok) => ok,
+            Err(e) => {
+                // Hardened environments (CI runners, hardened kernels) often
+                // cannot run Chromium's setuid/userns sandbox at all. Retry
+                // once without the sandbox rather than failing the session.
+                let msg = e.to_string();
+                let sandbox_culprit = msg.contains("sandbox")
+                    || msg.contains("Sandbox")
+                    || msg.contains("zygote")
+                    || msg.to_lowercase().contains("namespace");
+                if !sandbox_culprit {
+                    return Err(proto_err(e));
+                }
+                tracing::warn!(
+                    "sandboxed launch failed ({msg}); retrying with --no-sandbox"
+                );
+                let retry_config = builder
+                    .arg("no-sandbox")
+                    .arg("disable-setuid-sandbox")
+                    .build()
+                    .map_err(proto_err)?;
+                Browser::launch(retry_config).await.map_err(proto_err)?
+            }
+        };
 
         let handler_task = tokio::spawn(async move {
             while let Some(event) = handler.next().await {
@@ -519,7 +544,14 @@ impl CdpSession {
     async fn history_go(&mut self, expr: &str) -> Result<Navigated> {
         let page = self.tab().page.clone();
         page.evaluate(expr).await.map_err(proto_err)?;
-        page.wait_for_navigation().await.map_err(proto_err)?;
+        if let Err(e) = page.wait_for_navigation().await {
+            // Reload/back destroys the inspected target mid-wait; that IS
+            // the navigation succeeding.
+            let msg = e.to_string();
+            if !msg.contains("navigated or closed") {
+                return Err(proto_err(e));
+            }
+        }
         let mut url = page.url().await.map_err(proto_err)?.unwrap_or_default();
         let state = self.tab_mut();
         state.current_url = url.clone();
