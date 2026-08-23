@@ -40,7 +40,9 @@ stealth, session pooling, vision fallback, WebMCP (P4).
   reaper in `vakd serve`), WebMCP surfacing (`web-mcp-tools`/`invoke`, graceful
   when absent).
 
-**Roadmap P0-P4 complete.** 37 tests green, clippy clean. See `AGENTS.md` for
+**Roadmap P0-P4 complete**, plus multi-tab sessions, cross-frame
+(iframe) perception & clicks, and CI on ubuntu/macos. 39 tests green,
+clippy clean. See `AGENTS.md` for
 the full map and post-roadmap ideas.
 
 ## Try it

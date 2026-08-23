@@ -1,5 +1,9 @@
 //! CDP backend: drives chrome-headless-shell (or any Chromium) over the
 //! Chrome DevTools Protocol via `chromiumoxide`.
+//!
+//! Sessions own a tab registry; every operation applies to the active tab.
+//! Snapshots merge accessibility trees across the frame tree (same-process
+//! frames), prefixing AX node ids with the frame id so refs stay unique.
 
 use crate::cft::{self, CftConfig};
 use crate::{
@@ -18,22 +22,23 @@ use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams,
     DispatchMouseEventType, MouseButton,
 };
+use chromiumoxide::cdp::js_protocol::runtime::{CallArgument, CallFunctionOnParams};
+use chromiumoxide::cdp::browser_protocol::emulation::SetTimezoneOverrideParams;
 use chromiumoxide::cdp::browser_protocol::network::{
     ClearBrowserCookiesParams, CookieParam, GetCookiesParams, SetCookiesParams,
 };
-use chromiumoxide::cdp::browser_protocol::emulation::SetTimezoneOverrideParams;
 use chromiumoxide::cdp::browser_protocol::page::{
     AddScriptToEvaluateOnNewDocumentParams, CaptureScreenshotFormat, CaptureScreenshotParams,
+    FrameId, GetFrameTreeParams,
 };
 use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
-use chromiumoxide::cdp::js_protocol::runtime::{CallArgument, CallFunctionOnParams};
 use chromiumoxide::handler::viewport::Viewport;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Result, Snapshot, WebMcpTool, VakError,
+    Cookie, CookieInput, ElementRef, Result, Snapshot, TabId, TabInfo, WebMcpTool, VakError,
 };
 
 use base64::Engine as _;
@@ -155,95 +160,172 @@ impl EngineLauncher for CdpLauncher {
         let page = browser.new_page("about:blank").await.map_err(proto_err)?;
 
         if let Some(stealth) = &options.stealth {
-            page.execute(AddScriptToEvaluateOnNewDocumentParams {
-                source: stealth.init_script(),
-                world_name: None,
-                include_command_line_api: None,
-                run_immediately: None,
-            })
-            .await
-            .map_err(proto_err)?;
-            page.execute(SetTimezoneOverrideParams {
-                timezone_id: stealth.timezone_id.clone(),
-            })
-            .await
-            .map_err(proto_err)?;
-            tracing::info!(seed = %stealth.seed, "stealth profile applied");
+            apply_stealth(&page, stealth).await?;
         }
 
-        Ok(Box::new(CdpSession {
-            browser,
-            _handler_task: handler_task,
+        let first = TabState {
             page,
             current_url: "about:blank".to_string(),
             refs: vakbrowse_perception::RefBook::new(),
             ref_to_ax: HashMap::new(),
             ax_to_backend: HashMap::new(),
+        };
+        let mut tabs = HashMap::new();
+        tabs.insert(TabId("t1".into()), first);
+
+        Ok(Box::new(CdpSession {
+            browser,
+            _handler_task: handler_task,
+            tabs,
+            active: TabId("t1".into()),
+            next_tab: 2,
             stealth: options.stealth.clone(),
             pointer: (0.0, 0.0),
         }))
     }
 }
 
-/// One browser process plus its current page. Dropping it tears the
-/// browser process down.
-pub struct CdpSession {
-    /// Kept for ownership: dropping the browser tears down the process.
-    #[allow(dead_code)]
-    browser: Browser,
-    _handler_task: JoinHandle<()>,
+async fn apply_stealth(page: &Page, stealth: &vakbrowse_stealth::StealthProfile) -> Result<()> {
+    page.execute(AddScriptToEvaluateOnNewDocumentParams {
+        source: stealth.init_script(),
+        world_name: None,
+        include_command_line_api: None,
+        run_immediately: None,
+    })
+    .await
+    .map_err(proto_err)?;
+    page.execute(SetTimezoneOverrideParams {
+        timezone_id: stealth.timezone_id.clone(),
+    })
+    .await
+    .map_err(proto_err)?;
+    // New tabs inherit document-level patches because the script is
+    // registered per target; register it on each new tab too (see new_tab).
+    tracing::info!(seed = %stealth.seed, "stealth profile applied");
+    Ok(())
+}
+
+struct TabState {
     page: Page,
     current_url: String,
     refs: vakbrowse_perception::RefBook,
     ref_to_ax: HashMap<ElementRef, String>,
     ax_to_backend: HashMap<String, BackendNodeId>,
+}
+
+/// One browser process with a tab registry. Dropping it tears the process
+/// down along with every tab.
+pub struct CdpSession {
+    /// Kept for ownership: dropping the browser tears down the process.
+    #[allow(dead_code)]
+    browser: Browser,
+    _handler_task: JoinHandle<()>,
+    tabs: HashMap<TabId, TabState>,
+    active: TabId,
+    next_tab: u64,
     stealth: Option<vakbrowse_stealth::StealthProfile>,
     pointer: (f64, f64),
 }
 
 impl CdpSession {
+    fn tab(&self) -> &TabState {
+        self.tabs.get(&self.active).expect("active tab exists")
+    }
+
+    fn tab_mut(&mut self) -> &mut TabState {
+        self.tabs.get_mut(&self.active).expect("active tab exists")
+    }
+
     fn backend_for(&self, r: &ElementRef) -> Result<BackendNodeId> {
         let ax_id = self
+            .tab()
             .ref_to_ax
             .get(r)
             .ok_or_else(|| VakError::NotFound(format!("stale element ref {r}")))?;
-        self.ax_to_backend
+        self.tab()
+            .ax_to_backend
             .get(ax_id)
             .copied()
             .ok_or_else(|| VakError::NotFound(format!("no backing node for {r}")))
     }
 
-    fn flatten(nodes: Vec<AxNode>) -> (Vec<vakbrowse_perception::FlatAxNode>, HashMap<String, BackendNodeId>) {
+    fn flatten(prefix: &str, nodes: Vec<AxNode>) -> (Vec<vakbrowse_perception::FlatAxNode>, HashMap<String, BackendNodeId>) {
         let mut flat = Vec::with_capacity(nodes.len());
         let mut backends = HashMap::new();
         for n in nodes {
+            let id = format!("{prefix}{}", n.node_id.as_ref());
             if !n.ignored && let Some(b) = n.backend_dom_node_id {
-                backends.insert(n.node_id.as_ref().to_string(), b);
+                backends.insert(id.clone(), b);
             }
             let s = |v: Option<chromiumoxide::cdp::browser_protocol::accessibility::AxValue>| {
                 v.and_then(|v| v.value)
                     .and_then(|j| j.as_str().map(str::to_string))
             };
             flat.push(vakbrowse_perception::FlatAxNode {
-                id: n.node_id.as_ref().to_string(),
-                ignored: n.ignored,
-                role: s(n.role),
-                name: s(n.name),
-                value: s(n.value),
                 child_ids: n
                     .child_ids
                     .unwrap_or_default()
                     .iter()
-                    .map(|c| c.as_ref().to_string())
+                    .map(|c| format!("{prefix}{}", c.as_ref()))
                     .collect(),
+                id,
+                ignored: n.ignored,
+                role: s(n.role),
+                name: s(n.name),
+                value: s(n.value),
             });
         }
         (flat, backends)
     }
 
+    /// Collect flat AX nodes from every frame in the frame tree
+    /// (root document first, then children depth-first).
+    async fn collect_frames(tab: &TabState) -> Result<(Vec<vakbrowse_perception::FlatAxNode>, HashMap<String, BackendNodeId>)> {
+        let page = &tab.page;
+        let tree = page
+            .execute(GetFrameTreeParams {})
+            .await
+            .map_err(proto_err)?
+            .result
+            .frame_tree;
+
+        let mut frame_ids: Vec<FrameId> = Vec::new();
+        let mut stack = vec![tree];
+        while let Some(node) = stack.pop() {
+            frame_ids.push(node.frame.id);
+            if let Some(children) = node.child_frames {
+                for c in children {
+                    stack.push(c);
+                }
+            }
+        }
+
+        let mut all_flat = Vec::new();
+        let mut all_backends = HashMap::new();
+        for (i, frame_id) in frame_ids.iter().enumerate() {
+            let resp = match page
+                .execute(GetFullAxTreeParams::builder().frame_id(frame_id.clone()).build())
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    // Cross-origin/OOPIF frames reject frame-scoped commands
+                    // on this session; skip rather than fail the snapshot.
+                    tracing::debug!("ax tree for frame #{i} unavailable: {e}");
+                    continue;
+                }
+            };
+            let prefix = format!("f{i}:");
+            let (flat, backends) = Self::flatten(&prefix, resp.result.nodes);
+            all_flat.extend(flat);
+            all_backends.extend(backends);
+        }
+        Ok((all_flat, all_backends))
+    }
+
     async fn box_center(&mut self, backend: BackendNodeId) -> Result<(f64, f64)> {
-        let resp = self
-            .page
+        let page = &self.tab().page;
+        let resp = page
             .execute(GetBoxModelParams::builder().backend_node_id(backend).build())
             .await
             .map_err(proto_err)?;
@@ -256,12 +338,9 @@ impl CdpSession {
         Ok((cx, cy))
     }
 
-    async fn resolve_object_id(
-        &mut self,
-        backend: BackendNodeId,
-    ) -> Result<String> {
-        let resp = self
-            .page
+    async fn resolve_object_id(&mut self, backend: BackendNodeId) -> Result<String> {
+        let page = &self.tab().page;
+        let resp = page
             .execute(ResolveNodeParams::builder().backend_node_id(backend).build())
             .await
             .map_err(proto_err)?;
@@ -286,8 +365,8 @@ impl CdpSession {
                 ..Default::default()
             })
             .collect();
-        let resp = self
-            .page
+        let page = &self.tab().page;
+        let resp = page
             .execute(
                 CallFunctionOnParams::builder()
                     .function_declaration(function_declaration)
@@ -317,20 +396,19 @@ impl CdpSession {
                 .y(y)
                 .build()
         };
+        let page = &self.tab().page;
         if self.stealth.is_some() {
             // Humanized: bezier path with eased steps instead of a teleport.
             let path =
                 vakbrowse_stealth::mouse_path(self.pointer, (x, y), 0x5EED_u64.wrapping_add(x as u64), 18);
             for (px, py) in path {
-                self.page
-                    .execute(dispatch(px, py).map_err(proto_err)?)
+                page.execute(dispatch(px, py).map_err(proto_err)?)
                     .await
                     .map_err(proto_err)?;
                 tokio::time::sleep(std::time::Duration::from_millis(4)).await;
             }
         } else {
-            self.page
-                .execute(dispatch(x, y).map_err(proto_err)?)
+            page.execute(dispatch(x, y).map_err(proto_err)?)
                 .await
                 .map_err(proto_err)?;
         }
@@ -338,9 +416,8 @@ impl CdpSession {
         Ok(())
     }
 
-    async fn evaluate_json(&self, expression: &str) -> Result<serde_json::Value> {
-        let resp = self
-            .page
+    async fn evaluate_json_on(&self, page: &Page, expression: &str) -> Result<serde_json::Value> {
+        let resp = page
             .execute(
                 EvaluateParams::builder()
                     .expression(expression)
@@ -388,27 +465,41 @@ function(val) {
 }
 "#;
 
+/// Clicks inside non-root frames can't use page-level mouse coordinates
+/// (child-frame boxes are frame-relative), so we fire a real DOM click on
+/// the resolved element instead. Trusted-input limitation documented in
+/// AGENTS.md.
+const FRAME_CLICK_JS: &str = r#"
+function() {
+  this.scrollIntoView({ block: 'center' });
+  this.click();
+  return true;
+}
+"#;
+
 #[async_trait::async_trait]
 impl PageOps for CdpSession {
     async fn navigate(&mut self, url: &str) -> Result<Navigated> {
         let validated = validate_url(url)?;
-        self.page.goto(validated.as_str()).await.map_err(proto_err)?;
+        self.tab().page.goto(validated.as_str()).await.map_err(proto_err)?;
 
-        self.current_url = validated.to_string();
+        let state = self.tab_mut();
+        state.current_url = validated.to_string();
         // Refs describe a document; a new document starts a new turn.
-        self.refs.reset();
-        self.ref_to_ax.clear();
-        self.ax_to_backend.clear();
+        state.refs.reset();
+        state.ref_to_ax.clear();
+        state.ax_to_backend.clear();
 
         let title = self.title().await?;
         Ok(Navigated {
-            url: self.current_url.clone(),
+            url: validated.to_string(),
             title,
         })
     }
 
     async fn title(&self) -> Result<String> {
         Ok(self
+            .tab()
             .page
             .get_title()
             .await
@@ -417,50 +508,45 @@ impl PageOps for CdpSession {
     }
 
     async fn eval_text(&self, expression: &str) -> Result<String> {
-        let result = self.page.evaluate(expression).await.map_err(proto_err)?;
+        let result = self
+            .tab()
+            .page
+            .evaluate(expression)
+            .await
+            .map_err(proto_err)?;
         result.into_value().map_err(proto_err)
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot> {
         let title = self.title().await?;
-        let resp = self
-            .page
-            .execute(GetFullAxTreeParams::default())
-            .await
-            .map_err(proto_err)?;
-        let (flat, backends) = Self::flatten(resp.result.nodes);
-        let build =
-            vakbrowse_perception::build_snapshot(&self.current_url, &title, &flat, &mut self.refs);
-        self.ref_to_ax = build.ref_to_ax;
-        self.ax_to_backend = backends;
+        let url = self.tab().current_url.clone();
+        let (flat, backends) = Self::collect_frames(self.tab()).await?;
+        let build = vakbrowse_perception::build_snapshot(&url, &title, &flat, &mut self.tab_mut().refs);
+        let state = self.tab_mut();
+        state.ref_to_ax = build.ref_to_ax;
+        state.ax_to_backend = backends;
         Ok(build.snapshot)
     }
 
     async fn click(&mut self, r: &ElementRef) -> Result<()> {
+        let ax_id = self
+            .tab()
+            .ref_to_ax
+            .get(r)
+            .ok_or_else(|| VakError::NotFound(format!("stale element ref {r}")))?
+            .clone();
         let backend = self.backend_for(r)?;
-        let (cx, cy) = self.box_center(backend).await?;
-        self.mouse_move(cx, cy).await?;
 
-        let press = || {
-            DispatchMouseEventParams::builder()
-                .r#type(DispatchMouseEventType::MousePressed)
-                .x(cx)
-                .y(cy)
-                .button(MouseButton::Left)
-                .click_count(1)
-                .build()
-        };
-        let release = || {
-            DispatchMouseEventParams::builder()
-                .r#type(DispatchMouseEventType::MouseReleased)
-                .x(cx)
-                .y(cy)
-                .button(MouseButton::Left)
-                .click_count(1)
-                .build()
-        };
-        self.page.execute(press().map_err(proto_err)?).await.map_err(proto_err)?;
-        self.page.execute(release().map_err(proto_err)?).await.map_err(proto_err)?;
+        // Root frame: trusted input at page-level coordinates.
+        if ax_id.starts_with("f0:") {
+            let (cx, cy) = self.box_center(backend).await?;
+            return self.click_at(cx, cy).await;
+        }
+        // Child frames: DOM click on the resolved element.
+        let ok = self
+            .call_on_element(backend, FRAME_CLICK_JS, vec![])
+            .await?;
+        let _ = ok;
         Ok(())
     }
 
@@ -521,40 +607,40 @@ impl PageOps for CdpSession {
         let down = DispatchKeyEventParams::builder()
             .r#type(key_type)
             .key(key_name.clone())
-            .code(code.to_string())
+            .code(code.clone())
             .windows_virtual_key_code(vk)
             .text(text.unwrap_or_default().to_string())
             .build()
             .map_err(proto_err)?;
-        self.page.execute(down).await.map_err(proto_err)?;
+        self.tab().page.execute(down).await.map_err(proto_err)?;
 
         let up = DispatchKeyEventParams::builder()
             .r#type(DispatchKeyEventType::KeyUp)
             .key(key_name)
-            .code(code.to_string())
+            .code(code)
             .windows_virtual_key_code(vk)
             .build()
             .map_err(proto_err)?;
-        self.page.execute(up).await.map_err(proto_err)?;
+        self.tab().page.execute(up).await.map_err(proto_err)?;
         Ok(())
     }
 
     async fn scroll(&mut self, dx: f64, dy: f64) -> Result<()> {
         let (cx, cy) = self.viewport_center().await?;
         self.mouse_move(cx, cy).await?;
-        self.page
-            .execute(
-                DispatchMouseEventParams::builder()
-                    .r#type(DispatchMouseEventType::MouseWheel)
-                    .x(cx)
-                    .y(cy)
-                    .delta_x(dx)
-                    .delta_y(dy)
-                    .build()
-                    .map_err(proto_err)?,
-            )
-            .await
-            .map_err(proto_err)?;
+        let page = &self.tab().page;
+        page.execute(
+            DispatchMouseEventParams::builder()
+                .r#type(DispatchMouseEventType::MouseWheel)
+                .x(cx)
+                .y(cy)
+                .delta_x(dx)
+                .delta_y(dy)
+                .build()
+                .map_err(proto_err)?,
+        )
+        .await
+        .map_err(proto_err)?;
         Ok(())
     }
 
@@ -563,6 +649,7 @@ impl PageOps for CdpSession {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         loop {
             let truthy = self
+                .tab()
                 .page
                 .evaluate(expr.as_str())
                 .await
@@ -581,6 +668,7 @@ impl PageOps for CdpSession {
 
     async fn cookies(&self) -> Result<Vec<Cookie>> {
         let resp = self
+            .tab()
             .page
             .execute(GetCookiesParams::default())
             .await
@@ -611,7 +699,8 @@ impl PageOps for CdpSession {
             .http_only(cookie.http_only)
             .build()
             .map_err(proto_err)?;
-        self.page
+        self.tab()
+            .page
             .execute(SetCookiesParams::builder().cookies(vec![param]).build().map_err(proto_err)?)
             .await
             .map_err(proto_err)?;
@@ -619,7 +708,8 @@ impl PageOps for CdpSession {
     }
 
     async fn clear_cookies(&self) -> Result<()> {
-        self.page
+        self.tab()
+            .page
             .execute(ClearBrowserCookiesParams {})
             .await
             .map_err(proto_err)?;
@@ -627,7 +717,8 @@ impl PageOps for CdpSession {
     }
 
     async fn set_download_dir(&self, dir: &Path) -> Result<()> {
-        self.page
+        self.tab()
+            .page
             .execute(
                 SetDownloadBehaviorParams::builder()
                     .behavior(SetDownloadBehaviorBehavior::AllowAndName)
@@ -642,6 +733,7 @@ impl PageOps for CdpSession {
 
     async fn screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
         let resp = self
+            .tab()
             .page
             .execute(
                 CaptureScreenshotParams::builder()
@@ -675,14 +767,16 @@ impl PageOps for CdpSession {
             .click_count(1)
             .build()
             .map_err(proto_err)?;
-        self.page.execute(press).await.map_err(proto_err)?;
-        self.page.execute(release).await.map_err(proto_err)?;
+        let page = &self.tab().page;
+        page.execute(press).await.map_err(proto_err)?;
+        page.execute(release).await.map_err(proto_err)?;
         Ok(())
     }
 
     async fn webmcp_tools(&self) -> Result<Vec<WebMcpTool>> {
         let value = self
-            .evaluate_json(
+            .evaluate_json_on(
+                &self.tab().page,
                 r#"(() => {
                   const mc = navigator.modelContext;
                   if (!mc || typeof mc.listTools !== 'function') return [];
@@ -690,7 +784,7 @@ impl PageOps for CdpSession {
                     (ts || []).map(t => ({ name: t.name, description: t.description || '' })));
                 })()"#,
             )
-            .await?; // evaluate_json is &mut... see note below
+            .await?;
         serde_json::from_value(value)
             .map_err(|e| VakError::Protocol(format!("webmcp tools shape: {e}")))
     }
@@ -710,7 +804,7 @@ impl PageOps for CdpSession {
             name = serde_json::json!(name),
             args = args,
         );
-        match self.evaluate_json(&js).await {
+        match self.evaluate_json_on(&self.tab().page, &js).await {
             Ok(v) => Ok(match v {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
@@ -719,5 +813,88 @@ impl PageOps for CdpSession {
                 "WebMCP tool {name:?} not invokable (feature or tool absent)"
             ))),
         }
+    }
+
+    async fn tabs(&self) -> Result<Vec<TabInfo>> {
+        let mut list: Vec<TabInfo> = self
+            .tabs
+            .iter()
+            .map(|(id, t)| TabInfo {
+                id: id.clone(),
+                url: t.current_url.clone(),
+            })
+            .collect();
+        list.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        // Active tab first.
+        if let Some(pos) = list.iter().position(|t| t.id == self.active) {
+            let active = list.remove(pos);
+            list.insert(0, active);
+        }
+        Ok(list)
+    }
+
+    async fn new_tab(&mut self, url: Option<&str>) -> Result<TabInfo> {
+        let id = TabId(format!("t{}", self.next_tab));
+        self.next_tab += 1;
+
+        let page = self.browser.new_page("about:blank").await.map_err(proto_err)?;
+        if let Some(stealth) = &self.stealth {
+            apply_stealth(&page, stealth).await?;
+        }
+
+        let mut state = TabState {
+            page,
+            current_url: "about:blank".to_string(),
+            refs: vakbrowse_perception::RefBook::new(),
+            ref_to_ax: HashMap::new(),
+            ax_to_backend: HashMap::new(),
+        };
+
+        if let Some(url) = url {
+            let validated = validate_url(url)?;
+            state.page.goto(validated.as_str()).await.map_err(proto_err)?;
+            state.current_url = validated.to_string();
+        }
+
+        let info = TabInfo {
+            id: id.clone(),
+            url: state.current_url.clone(),
+        };
+        self.tabs.insert(id, state);
+        self.active = info.id.clone();
+        self.pointer = (0.0, 0.0);
+        tracing::info!(tab = %info.id, "tab opened");
+        Ok(info)
+    }
+
+    async fn switch_tab(&mut self, tab: &TabId) -> Result<()> {
+        if !self.tabs.contains_key(tab) {
+            return Err(VakError::NotFound(format!("unknown tab {tab}")));
+        }
+        self.active = tab.clone();
+        self.pointer = (0.0, 0.0);
+        Ok(())
+    }
+
+    async fn close_tab(&mut self, tab: &TabId) -> Result<bool> {
+        if !self.tabs.contains_key(tab) {
+            return Ok(false);
+        }
+        if self.tabs.len() == 1 {
+            return Err(VakError::Engine(
+                "cannot close the last remaining tab".into(),
+            ));
+        }
+        let state = self.tabs.remove(tab).expect("checked above");
+        // Best-effort target close; dropping the Page also detaches.
+        let _ = state.page.close().await;
+        if self.active == *tab {
+            // Pick any remaining tab deterministically.
+            if let Some(next) = self.tabs.keys().next().cloned() {
+                self.active = next;
+            }
+        }
+        tracing::info!(%tab, "tab closed");
+        Ok(true)
     }
 }

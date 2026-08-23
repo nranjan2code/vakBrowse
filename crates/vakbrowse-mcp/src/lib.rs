@@ -184,6 +184,44 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             ),
         ),
         Tool::new(
+            "browser_tabs",
+            "List tabs of the session (active first).",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_new_tab",
+            "Open a new tab (optionally navigating) and make it active.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("url", json!({"type": "string"})),
+                ],
+                &["session"],
+            ),
+        ),
+        Tool::new(
+            "browser_switch_tab",
+            "Make an existing tab active (refs belong to tabs).",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("tab", json!({"type": "string"})),
+                ],
+                &["session", "tab"],
+            ),
+        ),
+        Tool::new(
+            "browser_close_tab",
+            "Close a tab (the last one cannot be closed).",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("tab", json!({"type": "string"})),
+                ],
+                &["session", "tab"],
+            ),
+        ),
+        Tool::new(
             "browser_wait",
             "Wait until a JS predicate becomes truthy.",
             schema(
@@ -337,6 +375,28 @@ impl VakMcp {
                         .to_string(),
                 },
             },
+            "browser_tabs" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Tabs,
+            },
+            "browser_new_tab" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::NewTab {
+                    url: arg(args, "url").and_then(|v| v.as_str()).map(String::from),
+                },
+            },
+            "browser_switch_tab" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::SwitchTab {
+                    tab: vakbrowse_core::TabId(arg_str(args, "tab")?),
+                },
+            },
+            "browser_close_tab" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::CloseTab {
+                    tab: vakbrowse_core::TabId(arg_str(args, "tab")?),
+                },
+            },
             "browser_wait" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),
                 action: Action::WaitForTruthy {
@@ -391,6 +451,14 @@ fn render_payload(p: &ResponsePayload) -> String {
             }
             vakbrowse_server::ActionResult::Done => "done".into(),
             vakbrowse_server::ActionResult::Image { .. } => "(screenshot)".into(),
+            vakbrowse_server::ActionResult::Tabs { tabs } => tabs
+                .iter()
+                .map(|t| format!("{} {}", t.id, t.url))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            vakbrowse_server::ActionResult::TabOpened { tab } => {
+                format!("tab {} open ({})", tab.id, tab.url)
+            }
             vakbrowse_server::ActionResult::Tools { tools } => {
                 if tools.is_empty() {
                     "(no WebMCP tools on this page)".into()

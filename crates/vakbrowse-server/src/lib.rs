@@ -14,8 +14,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, ProfileId, Result, SessionId, Snapshot, VakError,
-    WebMcpTool,
+    Cookie, CookieInput, ElementRef, ProfileId, Result, SessionId, Snapshot, TabId, TabInfo,
+    VakError, WebMcpTool,
 };
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
 
@@ -78,6 +78,11 @@ pub enum Action {
     WebMcpTools,
     /// Invoke a page-declared WebMCP tool.
     WebMcpInvoke { name: String, arguments_json: String },
+
+    Tabs,
+    NewTab { url: Option<String> },
+    SwitchTab { tab: TabId },
+    CloseTab { tab: TabId },
 }
 
 /// What an action produced. All variants are struct-style because
@@ -93,6 +98,8 @@ pub enum ActionResult {
     Done,
     Image { png_base64: String },
     Tools { tools: Vec<WebMcpTool> },
+    Tabs { tabs: Vec<TabInfo> },
+    TabOpened { tab: TabInfo },
 }
 
 /// Everything a surface can ask of the manager.
@@ -436,6 +443,17 @@ impl SessionManager {
             } => ActionResult::Text {
                 text: page.webmcp_invoke(&name, &arguments_json).await?,
             },
+
+            Action::Tabs => ActionResult::Tabs { tabs: page.tabs().await? },
+            Action::NewTab { url } => {
+                let tab = page.new_tab(url.as_deref()).await?;
+                ActionResult::TabOpened { tab }
+            }
+            Action::SwitchTab { tab } => {
+                page.switch_tab(&tab).await?;
+                ActionResult::Done
+            }
+            Action::CloseTab { tab } => ActionResult::Flag { ok: page.close_tab(&tab).await? },
         };
 
         if let ActionResult::Navigated { url, .. } = &result

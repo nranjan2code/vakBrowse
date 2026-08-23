@@ -7,7 +7,7 @@ pub mod cft;
 pub use cdp::CdpLauncher;
 
 use std::path::{Path, PathBuf};
-use vakbrowse_core::{Cookie, CookieInput, ElementRef, Result, Snapshot, WebMcpTool, VakError};
+use vakbrowse_core::{Cookie, CookieInput, ElementRef, Result, Snapshot, TabId, TabInfo, WebMcpTool, VakError};
 
 /// Everything needed to start a browser process.
 #[derive(Debug, Clone)]
@@ -81,6 +81,16 @@ pub trait PageOps: Send {
     async fn webmcp_tools(&self) -> Result<Vec<WebMcpTool>>;
     /// Invoke a page-declared WebMCP tool; errors Unsupported when absent.
     async fn webmcp_invoke(&self, name: &str, arguments_json: &str) -> Result<String>;
+
+    /// Tabs of this session, active tab first.
+    async fn tabs(&self) -> Result<Vec<TabInfo>>;
+    /// Open a new tab, optionally navigating immediately; it becomes active.
+    async fn new_tab(&mut self, url: Option<&str>) -> Result<TabInfo>;
+    /// Make an existing tab active. Snapshot refs belong to tabs.
+    async fn switch_tab(&mut self, tab: &TabId) -> Result<()>;
+    /// Close a tab (the last remaining one cannot be closed). Returns
+    /// whether it existed.
+    async fn close_tab(&mut self, tab: &TabId) -> Result<bool>;
 }
 
 #[derive(Debug, Clone)]

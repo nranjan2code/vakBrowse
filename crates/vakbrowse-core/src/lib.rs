@@ -48,6 +48,14 @@ macro_rules! id_type {
 id_type!(SessionId);
 id_type!(ProfileId);
 id_type!(ElementRef);
+id_type!(TabId);
+
+/// A browser tab (target) inside a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabInfo {
+    pub id: TabId,
+    pub url: String,
+}
 
 /// A stable reference to an interactive element within a snapshot turn,
 /// e.g. `@e12`. Refs are reconciled on each snapshot and valid until the

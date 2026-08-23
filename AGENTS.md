@@ -87,7 +87,7 @@ crates/
                         #   snapshot text renderer, UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   12 browser_* tools; logic transport-free for testing
+                        #   20 browser_* tools incl. tabs/screenshot/click-at/webmcp;
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model
   vakbrowse-ffi         # cdylib C ABI (`vak_request(json) -> json`) w/ embedded
@@ -122,6 +122,14 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
   defeat behavioral biometrics or TLS fingerprinting. See stealth crate doc.
 - Vision fallback flow for agents: browser_screenshot -> reason over pixels ->
   browser_click_at(x,y). Pair with a11y snapshots first; coords are last resort.
+- Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
+  per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
+  `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the
+  resolved element because child-frame box coords are frame-relative —
+  trusted mouse events apply to root-frame elements only today. OOPIF frames
+  that reject frame-scoped CDP commands are skipped, not fatal. file://
+  iframes are unique-origin: they cannot navigate `_top`; test signals must
+  stay inside the frame.
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),
   zip v8 extraction. CDP gotcha: in `Runtime.callFunctionOn` the resolved DOM
   node arrives as `this`, not as an argument.

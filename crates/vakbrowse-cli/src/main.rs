@@ -88,6 +88,14 @@ enum Command {
         #[arg(default_value = "{}")]
         arguments_json: String,
     },
+    /// List tabs of a session (active first).
+    Tabs { session: String },
+    /// Open a new tab (becomes active).
+    NewTab { session: String, url: Option<String> },
+    /// Switch the active tab.
+    Switch { session: String, tab: String },
+    /// Close a tab.
+    CloseTab { session: String, tab: String },
 }
 
 #[tokio::main]
@@ -155,6 +163,10 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 arguments_json,
             },
         ),
+        Command::Tabs { session } => act(session, Action::Tabs),
+        Command::NewTab { session, url } => act(session, Action::NewTab { url }),
+        Command::Switch { session, tab } => act(session, Action::SwitchTab { tab: vakbrowse_core::TabId(tab) }),
+        Command::CloseTab { session, tab } => act(session, Action::CloseTab { tab: vakbrowse_core::TabId(tab) }),
     })
 }
 
@@ -216,6 +228,14 @@ fn render_payload(p: ResponsePayload) -> String {
                 &cookies,
             )
             .unwrap_or_else(|_| "[]".into()),
+            vakbrowse_server::ActionResult::Tabs { tabs } => tabs
+                .iter()
+                .map(|t| format!("{}\t{}", t.id, t.url))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            vakbrowse_server::ActionResult::TabOpened { tab } => {
+                format!("tab {} open ({})", tab.id, tab.url)
+            }
             vakbrowse_server::ActionResult::Done => "done".into(),
             vakbrowse_server::ActionResult::Image { png_base64 } => {
                 save_screenshot(&png_base64)
