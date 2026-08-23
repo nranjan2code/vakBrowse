@@ -45,6 +45,10 @@ impl Default for LaunchOptions {
 pub trait PageOps: Send {
     async fn navigate(&mut self, url: &str) -> Result<Navigated>;
     async fn title(&self) -> Result<String>;
+    /// History: go back / forward one entry, reload current document.
+    async fn back(&mut self) -> Result<Navigated>;
+    async fn forward(&mut self) -> Result<Navigated>;
+    async fn reload(&mut self) -> Result<Navigated>;
 
     /// Compact a11y snapshot with stable `@eN` refs. Refs stay valid across
     /// snapshots until the next navigation.

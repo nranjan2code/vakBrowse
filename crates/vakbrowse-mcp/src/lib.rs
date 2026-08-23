@@ -184,6 +184,21 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             ),
         ),
         Tool::new(
+            "browser_back",
+            "Go back one history entry.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_forward",
+            "Go forward one history entry.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_reload",
+            "Reload the current document.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
             "browser_tabs",
             "List tabs of the session (active first).",
             schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
@@ -374,6 +389,18 @@ impl VakMcp {
                         .unwrap_or("{}")
                         .to_string(),
                 },
+            },
+            "browser_back" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Back,
+            },
+            "browser_forward" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Forward,
+            },
+            "browser_reload" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Reload,
             },
             "browser_tabs" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),

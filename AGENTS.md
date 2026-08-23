@@ -122,6 +122,18 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
   defeat behavioral biometrics or TLS fingerprinting. See stealth crate doc.
 - Vision fallback flow for agents: browser_screenshot -> reason over pixels ->
   browser_click_at(x,y). Pair with a11y snapshots first; coords are last resort.
+- Snapshot self-heals: at snapshot time we reconcile against `page.url()`,
+  so click-driven navigations (form submits, SPA links) update the reported
+  URL and start a fresh ref turn — even though only explicit navigate()
+  goes through our code.
+- `fill` focuses the element before setting its value; the human pattern
+  fill -> press_key(Enter) therefore submits forms and SPA search boxes.
+- History actions (`back`/`forward`/`reload`) wait for navigation and
+  tolerate the old execution context dying mid-reload.
+- Dogfood findings (real web): Wikipedia/HN/GitHub flows work end-to-end;
+  DuckDuckGo serves an anti-bot JS shell to non-stealth headless Chrome —
+  use stealth profiles for bot-walled sites. Follow-up: expose per-session
+  stealth via SessionOptions/CLI flag.
 - Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
   per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
   `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the

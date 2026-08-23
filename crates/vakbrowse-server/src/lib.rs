@@ -79,6 +79,10 @@ pub enum Action {
     /// Invoke a page-declared WebMCP tool.
     WebMcpInvoke { name: String, arguments_json: String },
 
+    Back,
+    Forward,
+    Reload,
+
     Tabs,
     NewTab { url: Option<String> },
     SwitchTab { tab: TabId },
@@ -454,6 +458,28 @@ impl SessionManager {
                 ActionResult::Done
             }
             Action::CloseTab { tab } => ActionResult::Flag { ok: page.close_tab(&tab).await? },
+
+            Action::Back => {
+                let nav = page.back().await?;
+                if let Some(st) = self.sessions.lock().await.get_mut(id) {
+                    st.current_url = nav.url.clone();
+                }
+                ActionResult::Navigated { url: nav.url, title: nav.title }
+            }
+            Action::Forward => {
+                let nav = page.forward().await?;
+                if let Some(st) = self.sessions.lock().await.get_mut(id) {
+                    st.current_url = nav.url.clone();
+                }
+                ActionResult::Navigated { url: nav.url, title: nav.title }
+            }
+            Action::Reload => {
+                let nav = page.reload().await?;
+                if let Some(st) = self.sessions.lock().await.get_mut(id) {
+                    st.current_url = nav.url.clone();
+                }
+                ActionResult::Navigated { url: nav.url, title: nav.title }
+            }
         };
 
         if let ActionResult::Navigated { url, .. } = &result

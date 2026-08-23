@@ -88,6 +88,12 @@ enum Command {
         #[arg(default_value = "{}")]
         arguments_json: String,
     },
+    /// Go back one history entry.
+    Back { session: String },
+    /// Go forward one history entry.
+    Forward { session: String },
+    /// Reload the current document.
+    Reload { session: String },
     /// List tabs of a session (active first).
     Tabs { session: String },
     /// Open a new tab (becomes active).
@@ -163,6 +169,9 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 arguments_json,
             },
         ),
+        Command::Back { session } => act(session, Action::Back),
+        Command::Forward { session } => act(session, Action::Forward),
+        Command::Reload { session } => act(session, Action::Reload),
         Command::Tabs { session } => act(session, Action::Tabs),
         Command::NewTab { session, url } => act(session, Action::NewTab { url }),
         Command::Switch { session, tab } => act(session, Action::SwitchTab { tab: vakbrowse_core::TabId(tab) }),

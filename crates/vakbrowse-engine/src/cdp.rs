@@ -416,6 +416,51 @@ impl CdpSession {
         Ok(())
     }
 
+    async fn history_go(&mut self, expr: &str) -> Result<Navigated> {
+        let page = self.tab().page.clone();
+        page.evaluate(expr).await.map_err(proto_err)?;
+        page.wait_for_navigation().await.map_err(proto_err)?;
+        let mut url = page.url().await.map_err(proto_err)?.unwrap_or_default();
+        let state = self.tab_mut();
+        state.current_url = url.clone();
+        state.refs.reset();
+        state.ref_to_ax.clear();
+        state.ax_to_backend.clear();
+        // Pointer position is meaningless after document change.
+        self.pointer = (0.0, 0.0);
+
+        // The old execution context dies with the document; give the new
+        // one a moment before reading the title.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut title = String::new();
+        loop {
+            match self.title().await {
+                Ok(t) if !t.is_empty() => {
+                    title = t;
+                    break;
+                }
+                Ok(_) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                }
+            }
+            // Re-read URL too: reload/history may have landed elsewhere.
+            if let Ok(Some(live)) = page.url().await
+                && live != url {
+                    url = live;
+                    self.tab_mut().current_url = url.clone();
+                }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok(Navigated { url, title })
+    }
+
     async fn evaluate_json_on(&self, page: &Page, expression: &str) -> Result<serde_json::Value> {
         let resp = page
             .execute(
@@ -435,6 +480,7 @@ impl CdpSession {
 const SET_VALUE_JS: &str = r#"
 function(val) {
   const el = this;
+  el.focus();
   const proto = el instanceof HTMLTextAreaElement
     ? HTMLTextAreaElement.prototype
     : HTMLInputElement.prototype;
@@ -518,6 +564,18 @@ impl PageOps for CdpSession {
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot> {
+        // Click-driven navigations bypass our navigate(); reconcile with
+        // the live URL and start a fresh ref turn when the document changed.
+        if let Ok(Some(live)) = self.tab().page.url().await
+            && live != self.tab().current_url
+        {
+            let state = self.tab_mut();
+            tracing::debug!(from = %state.current_url, to = %live, "detected navigation");
+            state.current_url = live;
+            state.refs.reset();
+            state.ref_to_ax.clear();
+            state.ax_to_backend.clear();
+        }
         let title = self.title().await?;
         let url = self.tab().current_url.clone();
         let (flat, backends) = Self::collect_frames(self.tab()).await?;
@@ -813,6 +871,18 @@ impl PageOps for CdpSession {
                 "WebMCP tool {name:?} not invokable (feature or tool absent)"
             ))),
         }
+    }
+
+    async fn back(&mut self) -> Result<Navigated> {
+        self.history_go("history.back()").await
+    }
+
+    async fn forward(&mut self) -> Result<Navigated> {
+        self.history_go("history.forward()").await
+    }
+
+    async fn reload(&mut self) -> Result<Navigated> {
+        self.history_go("location.reload()").await
     }
 
     async fn tabs(&self) -> Result<Vec<TabInfo>> {
