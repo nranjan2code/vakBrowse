@@ -1,5 +1,7 @@
 # vakBrowse
 
+[![CI](https://github.com/nranjan2code/vakBrowse/actions/workflows/ci.yml/badge.svg)](https://github.com/nranjan2code/vakBrowse/actions/workflows/ci.yml)
+
 An agent-native browser: a Rust core that gives AI agents a real, scriptable
 web browser. Humans are optional.
 
