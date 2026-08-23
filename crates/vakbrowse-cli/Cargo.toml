@@ -1,0 +1,18 @@
+[package]
+name = "vakbrowse-cli"
+description = "Command-line surface for vakBrowse (shell agents and humans)"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "vak"
+path = "src/main.rs"
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-server = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde_json.workspace = true
+base64 = "0.23.1"

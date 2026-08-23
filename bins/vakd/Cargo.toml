@@ -1,0 +1,18 @@
+[package]
+name = "vakd"
+description = "vakBrowse daemon: session pool, profiles, policy engine (P2+); doctor tooling now"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "vakd"
+path = "src/main.rs"
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-engine = { workspace = true }
+vakbrowse-server = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

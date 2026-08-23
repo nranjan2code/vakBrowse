@@ -1,0 +1,27 @@
+[package]
+name = "vakbrowse-api"
+description = "REST + WebSocket HTTP surface for vakBrowse"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "vakd-rest"
+path = "src/main.rs"
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-server = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+futures = { workspace = true }
+tempfile = "3"
+tokio-tungstenite = "0.30.0"
+url.workspace = true

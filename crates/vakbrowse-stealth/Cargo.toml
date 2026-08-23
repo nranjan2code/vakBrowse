@@ -1,0 +1,10 @@
+[package]
+name = "vakbrowse-stealth"
+description = "Fingerprint profiles, init-script patches and humanized input for vakBrowse"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+serde = { workspace = true }

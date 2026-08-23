@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vakbrowse-core",
+    "crates/vakbrowse-stealth",
+    "crates/vakbrowse-perception",
+    "crates/vakbrowse-engine",
+    "crates/vakbrowse-server",
+    "crates/vakbrowse-cli",
+    "crates/vakbrowse-mcp",
+    "crates/vakbrowse-api",
+    "crates/vakbrowse-ffi",
+    "bins/vakd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license-file = "LICENSE"
+repository = "https://github.com/vak/vakBrowse"
+
+[workspace.dependencies]
+vakbrowse-core = { path = "crates/vakbrowse-core" }
+vakbrowse-stealth = { path = "crates/vakbrowse-stealth" }
+vakbrowse-perception = { path = "crates/vakbrowse-perception" }
+vakbrowse-engine = { path = "crates/vakbrowse-engine" }
+vakbrowse-server = { path = "crates/vakbrowse-server" }
+
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+
+[profile.release]
+lto = "thin"
+strip = true

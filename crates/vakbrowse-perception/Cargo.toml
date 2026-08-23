@@ -1,0 +1,12 @@
+[package]
+name = "vakbrowse-perception"
+description = "AX-tree -> compact agent snapshots with stable element refs"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "vakbrowse-mcp"
+description = "MCP server surface for vakBrowse"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "vak-mcp"
+path = "src/main.rs"
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-server = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+rmcp = { version = "3.1.4", features = ["transport-io", "server"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+url.workspace = true
+
+[package.metadata.notes]
+status = "skeleton"

@@ -1,0 +1,27 @@
+[package]
+name = "vakbrowse-engine"
+description = "Engine abstraction + CDP backend for vakBrowse"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-perception = { path = "../../crates/vakbrowse-perception" }
+vakbrowse-stealth = { path = "../../crates/vakbrowse-stealth" }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+chromiumoxide = "0.9.1"
+dirs = "6.0.0"
+zip = "8.6.0"
+tempfile = "3.27.0"
+async-trait = "0.1.92"
+ureq = { version = "3.4.0", default-features = false, features = ["rustls"] }
+base64 = "0.23.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

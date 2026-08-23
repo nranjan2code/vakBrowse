@@ -1,0 +1,86 @@
+//! Token-efficient text rendering of snapshots for LLM contexts.
+//! One line per interactive element; ~15-25 tokens per element.
+
+use vakbrowse_core::Snapshot;
+
+pub fn snapshot_text(s: &Snapshot) -> String {
+    let mut out = String::with_capacity(64 + s.elements.len() * 48);
+    out.push_str(&format!("Page: {}\nURL: {}\n", s.title, s.url));
+    if s.elements.is_empty() {
+        out.push_str("(no interactive elements)");
+        return out;
+    }
+    for e in &s.elements {
+        out.push_str(&e.r#ref.0);
+        out.push('\t');
+        out.push_str(&e.role);
+        out.push_str(" \"");
+        out.push_str(&compact(&e.name, 60));
+        out.push('"');
+        if let Some(v) = &e.value {
+            out.push_str(" value=\"");
+            out.push_str(&compact(v, 80));
+            out.push('"');
+        }
+        out.push('\n');
+    }
+    // Trailing newline is noise for tokens.
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+fn compact(s: &str, max: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= max {
+        return one_line;
+    }
+    let cut: String = one_line.chars().take(max).collect();
+    format!("{cut}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vakbrowse_core::{ElementRef, SnapshotNode};
+
+    #[test]
+    fn renders_compact_lines() {
+        let s = Snapshot {
+            url: "https://x/".into(),
+            title: "T".into(),
+            elements: vec![
+                SnapshotNode {
+                    r#ref: ElementRef::new("@e1"),
+                    role: "button".into(),
+                    name: "Send application".into(),
+                    value: None,
+                    clickable: true,
+                },
+                SnapshotNode {
+                    r#ref: ElementRef::new("@e2"),
+                    role: "textbox".into(),
+                    name: "Search".into(),
+                    value: Some("hello world".into()),
+                    clickable: false,
+                },
+            ],
+        };
+        let text = snapshot_text(&s);
+        assert!(text.starts_with("Page: T\n"));
+        assert!(text.contains("@e1\tbutton \"Send application\""));
+        assert!(text.contains("@e2\ttextbox \"Search\" value=\"hello world\""));
+        assert!(!text.ends_with('\n'));
+    }
+
+    #[test]
+    fn empty_snapshot_note() {
+        let s = Snapshot {
+            url: "u".into(),
+            title: "t".into(),
+            elements: vec![],
+        };
+        assert!(snapshot_text(&s).contains("no interactive elements"));
+    }
+}
