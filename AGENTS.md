@@ -87,18 +87,15 @@ crates/
                         #   snapshot text renderer, UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   20 browser_* tools incl. tabs/screenshot/click-at/webmcp;
+                        #   24 browser_* tools (tabs, history, screenshot/click-at,
+                        #   extract, webmcp, stealth/proxy on open);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model
   vakbrowse-ffi         # cdylib C ABI (`vak_request(json) -> json`) w/ embedded
                         #   tokio runtime; consumed via ctypes/koffi/etc.
-
-(No remaining planned crates — the phase roadmap is complete.)
 bins/
   vakd                  # daemon (`serve`, `status`, `doctor`): owns sessions over UDS
 ```
-
-Planned crates (add when their phase starts): `vakbrowse-stealth`.
 
 ## Key facts
 
@@ -135,15 +132,14 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
   Wikipedia page). Agents should prefer extract over eval for reading.
 - Per-session proxy ships as `SessionOptions.proxy` (`--proxy` on CLI,
   `browser_open {proxy}` in MCP) — the answer to IP-reputation walls.
+  Proxy *rotation* across a pool of endpoints remains a future idea.
 - Dogfood findings (real web): Wikipedia/HN/GitHub/Bing flows work
   end-to-end. DuckDuckGo hard-walls automation (CAPTCHA on html endpoint,
   empty JS shell on main) even WITH a stealth profile — their detection is
   TLS/behavioral, not webdriver-level. Agent recipe: prefer Bing for search
-  flows. Per-session stealth ships as `SessionOptions.stealth_seed`
-  (`vak open --stealth`, `browser_open {stealth:true}`); it defeats
-  webdriver/plugin/pointer tells but not TLS-fingerprint walls.
-- Follow-up idea: proxy-per-profile support would address IP-reputation
-  walls like DDG's.
+  flows. Stealth (`vak open --stealth`, `browser_open {stealth:true}`,
+  seed via `stealth_seed`) defeats webdriver/plugin/pointer tells but not
+  TLS-fingerprint walls.
 - Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
   per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
   `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the
@@ -162,9 +158,15 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
 |---|---|---|
 | P0 | Scaffold, engine download/pin, CDP connect, navigate smoke | **done** |
 | P1 | A11y snapshots w/ stable refs, click/fill/select/wait actions, cookies, profiles, downloads dir | **done** |
-| P2 | `vakd` daemon (UDS) + `vak` CLI + `vak-mcp` MCP server (12 tools), policy allowlist | **done** |
+| P2 | `vakd` daemon (UDS) + `vak` CLI + `vak-mcp` MCP server (rmcp), policy allowlist | **done** |
 | P3 | REST/WS API (`vakd-rest`), FFI cdylib (Python ctypes verified), Dockerfile w/ baked engine | **done** |
-| P4 | Stealth module, session pooling, vision fallback, WebMCP surfacing | pending |
+| P4 | Stealth module, session pooling, vision fallback, WebMCP surfacing | **done** |
+| P5 | Multi-tab sessions, cross-frame (iframe) perception & clicks, CI (ubuntu/macos) | **done** |
+| P6 | Real-web dogfooding fixes (snapshot self-heal, fill-focuses, history) + per-session stealth/proxy + `extract` action + release workflow | **done** |
+
+Post-roadmap ideas (not committed): pip/npm packaging of the FFI,
+WebDriver BiDi backend behind the engine trait, Servo/Lightpanda
+experimental backends, proxy rotation across endpoint pools.
 
 ## Conventions
 

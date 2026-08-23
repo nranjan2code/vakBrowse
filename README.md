@@ -10,64 +10,67 @@ web browser. Humans are optional.
 ```
 vakBrowse/
 ├── crates/
-│   ├── vakbrowse-core        # domain types, errors, ids
-│   └── vakbrowse-engine      # Engine trait + CDP backend (chrome-headless-shell)
-├── bins/vakd                 # daemon (session pool, profiles, policy)  [P2]
+│   ├── vakbrowse-core        # domain types, errors, wire shapes
+│   ├── vakbrowse-perception  # a11y tree -> compact snapshots with stable @eN refs
+│   ├── vakbrowse-engine      # Engine trait + CDP backend (chrome-headless-shell),
+│   │                         #   stealth integration, proxy, history, extract
+│   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
+│   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
+│   ├── vakbrowse-cli         # `vak` binary
+│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 24 browser_* tools
+│   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
+│   └── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
+├── bins/vakd                 # daemon (session pool, profiles, policy)
 └── tests/fixtures            # offline fixture pages
 ```
 
-Surfaces land per phase: MCP server + CLI (P2), REST/WS API + FFI library (P3),
-stealth, session pooling, vision fallback, WebMCP (P4).
+One `SessionManager` and command model power every surface — add a
+capability once, all five surfaces get it.
 
 ## Status
 
-- **P0 done** — scaffold; chrome-headless-shell download/pin/cache; CDP
-  launch/connect/navigate/eval.
-- **P1 done** — a11y snapshots with stable `@eN` refs; trusted click /
-  framework-safe fill / select / key / scroll / wait; cookies + profiles.
-- **P2 done** — one `SessionManager`, three surfaces:
-  - `vakd serve` — daemon owning sessions over a UDS socket (`vakd status`)
-  - `vak` — CLI: open/navigate/snapshot/click/fill/select/key/wait/eval/close
-  - `vak-mcp` — MCP server (rmcp), 12 tools, verified handshake via stdio;
-    optional URL allowlist via `VAKBROWSE_ALLOW_PREFIXES`
-- **P3 done** — `vakd-rest` (axum): REST + WebSocket bridge over the same
-  Request model; `libvakbrowse_ffi` cdylib — Python ctypes drives a full
-  form flow in-process (no daemon); multi-stage Dockerfile with the pinned
-  engine baked into the image.
-- **P4 done** — stealth profiles (deterministic per identity, `navigator.webdriver`
-  patched, humanized bezier pointer paths), vision fallback (`shot`/`click-at`,
-  MCP returns real image content blocks), session pooling (hard caps + idle
-  reaper in `vakd serve`), WebMCP surfacing (`web-mcp-tools`/`invoke`, graceful
-  when absent).
+**Roadmap P0–P6 complete.**
 
-**Roadmap P0-P4 complete**, plus multi-tab sessions, cross-frame
-(iframe) perception & clicks, and CI on ubuntu/macos.
+- **Core (P0–P1)** — chrome-headless-shell download/pin/cache; a11y snapshots
+  with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
+  scroll/wait; cookies + persistent profiles.
+- **Surfaces (P2–P3)** — `vakd` daemon over UDS; `vak` CLI; `vak-mcp`
+  (**24 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
+  `libvakbrowse_ffi` cdylib (Python ctypes drives full flows in-process);
+  Docker image with the pinned engine baked in.
+- **Agent-grade capabilities (P4)** — stealth fingerprints + humanized
+  pointer paths, vision fallback (`shot`/`click-at`, MCP returns real
+  images), session pooling (caps + idle reaper), WebMCP surfacing.
+- **Depth (P5)** — multi-tab sessions, cross-frame (iframe) perception &
+  clicks, CI on ubuntu/macos.
+- **Battle-tested (P6)** — dogfooded live against Wikipedia / Hacker News /
+  GitHub / Bing / DuckDuckGo; fixed snapshot URL self-healing,
+  fill-now-focuses (Enter submits), history actions; per-session
+  `--stealth` and `--proxy`; `extract` action returning clean readable
+  article text; tagged releases shipping binaries.
 
-Dogfooded live against Wikipedia / Hacker News / GitHub / DuckDuckGo;
-three real bugs found and fixed (snapshot URL self-healing after
-click-navigation, fill now focuses so Enter submits, history actions),
-per-session stealth (`--stealth`) and proxy (`--proxy`), an `extract`
-action that returns clean readable article text (token-cheap LLM reading),
-and tagged releases shipping static binaries. Honest bot-wall findings:
-Bing OK, DuckDuckGo CAPTCHAs automation regardless of fingerprint.
-45 tests green, clippy clean.
+45 tests green, clippy clean. Honest bot-wall findings: Bing works,
+DuckDuckGo CAPTCHAs automation regardless of fingerprint (their detection
+is TLS/behavioral). See `AGENTS.md` for the full map and conventions.
 
 ## Install (from a release tag)
 
 Download the tarball for your platform from GitHub Releases — it contains
 `vakd`, `vak`, `vak-mcp` and `vakd-rest`. The engine binary downloads and
-pins itself on first run. See `AGENTS.md` for
-the full map and post-roadmap ideas.
+pins itself on first run (or bake it into Docker via the included
+Dockerfile).
 
 ## Try it
 
 ```sh
-cargo run -p vakd -- doctor        # engine probe
+cargo run -p vakd -- doctor        # engine probe (downloads engine on first run)
+cargo test --workspace             # hermetic test suite
 
 # daemon + CLI
 ./target/release/vakd serve &
 ./target/release/vak --socket /tmp/vakd.sock open https://example.com
 ./target/release/vak --socket /tmp/vakd.sock snapshot s1
+./target/release/vak --socket /tmp/vakd.sock extract s1
 
 # MCP server for Claude/Cursor/opencode: command = target/release/vak-mcp
 
@@ -81,13 +84,6 @@ import ctypes; ctypes.CDLL("target/release/libvakbrowse_ffi.dylib")
 
 # or container
 docker build -t vakbrowse . && docker run -p 7788:7788 vakbrowse
-```
-
-## Quick start
-
-```sh
-cargo run -p vakd -- doctor   # downloads/pins chrome-headless-shell if needed
-cargo test -p vakbrowse-engine
 ```
 
 ## License
