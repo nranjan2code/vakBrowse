@@ -49,6 +49,12 @@ fn proto_err(e: impl std::fmt::Display) -> VakError {
     VakError::Protocol(e.to_string())
 }
 
+#[cfg(unix)]
+fn is_root() -> bool {
+    // SAFETY: geteuid is always safe to call.
+    (unsafe { libc::geteuid() }) == 0
+}
+
 /// Default hardening flags applied to every launch. Deliberately NOT
 /// including `--no-sandbox`; sandboxing stays on and is the caller's
 /// environment responsibility.
@@ -113,27 +119,55 @@ impl EngineLauncher for CdpLauncher {
         let executable = self.resolve_executable(options.executable.as_ref()).await?;
         tracing::info!(exe = %executable.display(), "launching browser");
 
+        // chromiumoxide's ArgsBuilder prepends `--` itself; passing keys with
+        // dashes yields `----flag`, which Chromium silently ignores. Feed
+        // bare keys (and `key=value` pairs) instead.
+        fn push_arg(
+            builder: chromiumoxide::browser::BrowserConfigBuilder,
+            arg: &str,
+        ) -> chromiumoxide::browser::BrowserConfigBuilder {
+            let trimmed = arg.trim_start_matches('-');
+            match trimmed.split_once('=') {
+                Some((k, v)) => builder.arg((k, v)),
+                None => builder.arg(trimmed),
+            }
+        }
+
         let mut builder = BrowserConfig::builder();
         builder = builder.chrome_executable(executable.clone());
 
-        for arg in DEFAULT_ARGS {
-            builder = builder.arg(*arg);
-        }
+        let mut args: Vec<String> = DEFAULT_ARGS.iter().map(|s| s.to_string()).collect();
 
         let is_shell = Self::looks_like_shell(&executable);
         if !is_shell && options.headless {
-            builder = builder.arg("--headless=new");
+            args.push("--headless=new".into());
+        }
+
+        // Chromium's sandbox cannot operate as root (CI/Docker containers).
+        // Opt out only in that impossible case rather than by configuration.
+        #[cfg(unix)]
+        if is_root() {
+            args.push("--no-sandbox".into());
+            tracing::warn!("running as root: browser sandbox disabled (unsupported by Chromium)");
         }
 
         if let Some(stealth) = &options.stealth {
             for arg in vakbrowse_stealth::STEALTH_ARGS {
-                builder = builder.arg(*arg);
+                args.push(arg.to_string());
             }
-            builder = builder.arg(format!("--user-agent={}", stealth.user_agent));
+            args.push(format!("--user-agent={}", stealth.user_agent));
+            // Drop chromiumoxide's default set: it includes
+            // `--enable-automation`, which is exactly the tell stealth must
+            // hide. Our curated list above covers what matters.
+            builder = builder.disable_default_args();
         }
 
         if let Some(proxy) = &options.proxy_server {
-            builder = builder.arg(format!("--proxy-server={proxy}"));
+            args.push(format!("--proxy-server={proxy}"));
+        }
+
+        for arg in &args {
+            builder = push_arg(builder, arg);
         }
 
         if let Some(dir) = &options.user_data_dir {
@@ -148,7 +182,7 @@ impl EngineLauncher for CdpLauncher {
         }));
 
         for arg in &options.extra_args {
-            builder = builder.arg(arg.as_str());
+            builder = push_arg(builder, arg);
         }
 
         let config = builder.build().map_err(proto_err)?;

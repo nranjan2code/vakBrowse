@@ -15,11 +15,19 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
 2. **Engine seam is sacred.** All capabilities go through
    `crates/vakbrowse-engine/src/lib.rs` traits (`EngineLauncher`, `PageOps`).
    Never leak CDP/chromiumoxide types outside the engine crate.
-3. **No `--no-sandbox`.** Launch flags live in `cdp.rs::DEFAULT_ARGS`; sandbox
-   stays on.
-4. **URL policy gate.** Every navigation passes `validate_url`
+3. **Sandbox stays on** — except when running as root (CI/Docker), where
+   Chromium's sandbox cannot operate; `cdp.rs` auto-detects uid 0 and adds
+   `--no-sandbox` with a warning. Never add it by configuration.
+4. **chromiumoxide arg format**: `BrowserConfig::arg()` takes BARE keys —
+   it prepends `--` itself (`format!("--{key}")`). Passing `"--flag"`
+   produces `----flag`, which Chromium silently ignores (this shipped
+   broken for three phases before CI caught it). Always feed args through
+   `push_arg()` in `cdp.rs`. Under stealth profiles we also call
+   `disable_default_args()` to drop chromiumoxide's `--enable-automation`
+   default.
+5. **URL policy gate.** Every navigation passes `validate_url`
    (http/https/file/about/data only). Extend deliberately.
-5. **Token efficiency is a feature.** Perception output targets <500 tokens
+6. **Token efficiency is a feature.** Perception output targets <500 tokens
    per typical page snapshot.
 
 ## Build & verify (run from repo root)
