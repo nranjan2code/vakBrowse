@@ -71,3 +71,7 @@ docker build -t vakbrowse . && docker run -p 7788:7788 vakbrowse
 cargo run -p vakd -- doctor   # downloads/pins chrome-headless-shell if needed
 cargo test -p vakbrowse-engine
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
