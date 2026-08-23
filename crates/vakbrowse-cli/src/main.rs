@@ -34,6 +34,9 @@ enum Command {
         /// id or "default").
         #[arg(long)]
         stealth: bool,
+        /// Proxy for this session (http://user:pass@host:port | socks5://host:port).
+        #[arg(long)]
+        proxy: Option<String>,
     },
     /// Close a session.
     Close { session: String },
@@ -98,6 +101,8 @@ enum Command {
     Forward { session: String },
     /// Reload the current document.
     Reload { session: String },
+    /// Extract readable main-content text (title + url + body).
+    Extract { session: String },
     /// List tabs of a session (active first).
     Tabs { session: String },
     /// Open a new tab (becomes active).
@@ -135,7 +140,7 @@ async fn main() {
 
 fn to_request(cmd: Command) -> Result<Request, String> {
     Ok(match cmd {
-        Command::Open { url, profile, headed, stealth } => Request::Open {
+        Command::Open { url, profile, headed, stealth, proxy } => Request::Open {
             options: SessionOptions {
                 profile: profile.clone().map(vakbrowse_core::ProfileId::new),
                 headless: !headed,
@@ -143,6 +148,7 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 stealth_seed: stealth.then(|| {
                     profile.unwrap_or_else(|| "default".to_string())
                 }),
+                proxy,
             },
         },
         Command::Close { session } => Request::Close {
@@ -179,6 +185,7 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         Command::Back { session } => act(session, Action::Back),
         Command::Forward { session } => act(session, Action::Forward),
         Command::Reload { session } => act(session, Action::Reload),
+        Command::Extract { session } => act(session, Action::Extract),
         Command::Tabs { session } => act(session, Action::Tabs),
         Command::NewTab { session, url } => act(session, Action::NewTab { url }),
         Command::Switch { session, tab } => act(session, Action::SwitchTab { tab: vakbrowse_core::TabId(tab) }),

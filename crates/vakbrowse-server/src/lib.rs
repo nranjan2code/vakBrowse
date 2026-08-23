@@ -14,8 +14,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, ProfileId, Result, SessionId, Snapshot, TabId, TabInfo,
-    VakError, WebMcpTool,
+    Cookie, CookieInput, ElementRef, Extracted, ProfileId, Result, SessionId, Snapshot, TabId,
+    TabInfo, VakError, WebMcpTool,
 };
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
 
@@ -35,6 +35,10 @@ pub struct SessionOptions {
     /// language/plugin data, robotic pointer teleports).
     #[serde(default)]
     pub stealth_seed: Option<String>,
+    /// Chromium proxy for this session (`http://user:pass@host:port`,
+    /// `socks5://host:port`), answering IP-reputation walls like DDG's.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -48,6 +52,7 @@ impl Default for SessionOptions {
             headless: true,
             url: None,
             stealth_seed: None,
+            proxy: None,
         }
     }
 }
@@ -88,6 +93,8 @@ pub enum Action {
     Back,
     Forward,
     Reload,
+    /// Readable main-content extraction (title + markdown-ish text).
+    Extract,
 
     Tabs,
     NewTab { url: Option<String> },
@@ -299,6 +306,7 @@ impl SessionManager {
                 .stealth_seed
                 .as_deref()
                 .map(vakbrowse_stealth::StealthProfile::generate),
+            proxy_server: options.proxy.clone(),
             ..LaunchOptions::default()
         };
         if let Some(profile) = &options.profile {
@@ -482,6 +490,10 @@ impl SessionManager {
                     st.current_url = nav.url.clone();
                 }
                 ActionResult::Navigated { url: nav.url, title: nav.title }
+            }
+            Action::Extract => {
+                let ex: Extracted = page.extract().await?;
+                ActionResult::Text { text: format!("{}\n{}\n\n{}", ex.title, ex.url, ex.text) }
             }
             Action::Reload => {
                 let nav = page.reload().await?;

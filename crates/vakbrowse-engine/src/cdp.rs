@@ -38,7 +38,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Result, Snapshot, TabId, TabInfo, WebMcpTool, VakError,
+    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, WebMcpTool,
+    VakError,
 };
 
 use base64::Engine as _;
@@ -129,6 +130,10 @@ impl EngineLauncher for CdpLauncher {
                 builder = builder.arg(*arg);
             }
             builder = builder.arg(format!("--user-agent={}", stealth.user_agent));
+        }
+
+        if let Some(proxy) = &options.proxy_server {
+            builder = builder.arg(format!("--proxy-server={proxy}"));
         }
 
         if let Some(dir) = &options.user_data_dir {
@@ -414,6 +419,67 @@ impl CdpSession {
         }
         self.pointer = (x, y);
         Ok(())
+    }
+
+    async fn extract_inner(&mut self) -> Result<Extracted> {
+        const EXTRACT_JS: &str = r#"
+(() => {
+  const MAX = 20000;
+  // Candidate containers scored by paragraph/text density.
+  const candidates = Array.from(document.querySelectorAll(
+    'article, main, [role=main], .post, .entry-content, #content, #main'));
+  let root = candidates[0] || document.body;
+  let bestScore = -1;
+  const score = (el) => el.innerText.length;
+  for (const c of candidates) {
+    const s = score(c);
+    if (s > bestScore) { bestScore = s; root = c; }
+  }
+  // Drop obvious chrome from the chosen root's copy.
+  root = root.cloneNode(true);
+  root.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,' +
+    '[aria-hidden=true],[role=navigation],[role=banner],[role=contentinfo]')
+    .forEach(n => n.remove());
+
+  const lines = [];
+  const push = (t) => { const x = t.replace(/\s+/g, ' ').trim(); if (x) lines.push(x); };
+  const walk = (node) => {
+    for (const child of node.children || []) {
+      const tag = child.tagName ? child.tagName.toLowerCase() : '';
+      if (['p','li','blockquote','pre','td','figcaption'].includes(tag)) {
+        const headingInside = child.querySelector && child.querySelector('h1,h2,h3,h4');
+        if (headingInside) walk(child);
+        else push(child.innerText);
+      } else if (/^h[1-6]$/.test(tag)) {
+        lines.push('');
+        lines.push('#'.repeat(+tag[1]) + ' ' + child.innerText.trim());
+        lines.push('');
+      } else if (tag === 'br') {
+        continue;
+      } else {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+  let text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  let truncated = false;
+  if (text.length > MAX) { text = text.slice(0, MAX); truncated = true; }
+  return JSON.stringify({
+    title: document.title,
+    url: location.href,
+    text: text,
+    truncated: truncated
+  });
+})()"#;
+
+        let value = self.evaluate_json_on(&self.tab().page, EXTRACT_JS).await?;
+        let parsed: serde_json::Value = match value {
+            serde_json::Value::String(s) => serde_json::from_str(&s)
+                .map_err(|e| VakError::Protocol(format!("extract shape: {e}")))?,
+            other => other,
+        };
+        serde_json::from_value(parsed).map_err(|e| VakError::Protocol(format!("extract: {e}")))
     }
 
     async fn history_go(&mut self, expr: &str) -> Result<Navigated> {
@@ -871,6 +937,10 @@ impl PageOps for CdpSession {
                 "WebMCP tool {name:?} not invokable (feature or tool absent)"
             ))),
         }
+    }
+
+    async fn extract(&mut self) -> Result<Extracted> {
+        self.extract_inner().await
     }
 
     async fn back(&mut self) -> Result<Navigated> {

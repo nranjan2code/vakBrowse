@@ -49,6 +49,7 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                     ("profile", json!({"type": "string", "description": "persistent profile id; keeps cookies across calls"})),
                     ("headed", json!({"type": "boolean", "description": "show window (default false)"})),
                     ("stealth", json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"})),
+                    ("proxy", json!({"type": "string", "description": "proxy for this session, e.g. http://user:pass@host:port or socks5://host:port"})),
                 ],
                 &[],
             ),
@@ -185,6 +186,11 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             ),
         ),
         Tool::new(
+            "browser_extract",
+            "Extract the page's readable main content as text (token-cheap reading; prefer over eval).",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
             "browser_back",
             "Go back one history entry.",
             schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
@@ -311,6 +317,7 @@ impl VakMcp {
                         .and_then(|v| v.as_bool())
                         .filter(|b| *b)
                         .map(|_| "mcp".to_string()),
+                    proxy: arg(args, "proxy").and_then(|v| v.as_str()).map(String::from),
                 },
             },
             "browser_close" => Request::Close {
@@ -394,6 +401,10 @@ impl VakMcp {
                         .unwrap_or("{}")
                         .to_string(),
                 },
+            },
+            "browser_extract" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Extract,
             },
             "browser_back" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),

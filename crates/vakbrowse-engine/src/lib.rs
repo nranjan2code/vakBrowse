@@ -7,7 +7,10 @@ pub mod cft;
 pub use cdp::CdpLauncher;
 
 use std::path::{Path, PathBuf};
-use vakbrowse_core::{Cookie, CookieInput, ElementRef, Result, Snapshot, TabId, TabInfo, WebMcpTool, VakError};
+use vakbrowse_core::{
+    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, WebMcpTool,
+    VakError,
+};
 
 /// Everything needed to start a browser process.
 #[derive(Debug, Clone)]
@@ -24,6 +27,8 @@ pub struct LaunchOptions {
     /// When set, applies the profile's fingerprint patches and humanized
     /// input behavior.
     pub stealth: Option<vakbrowse_stealth::StealthProfile>,
+    /// Chromium proxy, e.g. `http://user:pass@host:port` or `socks5://host:port`.
+    pub proxy_server: Option<String>,
 }
 
 impl Default for LaunchOptions {
@@ -35,6 +40,7 @@ impl Default for LaunchOptions {
             window_size: (1280, 800),
             extra_args: Vec::new(),
             stealth: None,
+            proxy_server: None,
         }
     }
 }
@@ -45,6 +51,8 @@ impl Default for LaunchOptions {
 pub trait PageOps: Send {
     async fn navigate(&mut self, url: &str) -> Result<Navigated>;
     async fn title(&self) -> Result<String>;
+    /// Clean main-content extraction (readability-style) for LLM consumption.
+    async fn extract(&mut self) -> Result<Extracted>;
     /// History: go back / forward one entry, reload current document.
     async fn back(&mut self) -> Result<Navigated>;
     async fn forward(&mut self) -> Result<Navigated>;

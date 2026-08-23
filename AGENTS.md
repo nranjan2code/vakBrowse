@@ -130,6 +130,11 @@ Planned crates (add when their phase starts): `vakbrowse-stealth`.
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
 - History actions (`back`/`forward`/`reload`) wait for navigation and
   tolerate the old execution context dying mid-reload.
+- `extract` is the token-cheap reading tool: readability-style main-content
+  extraction returning title/url/markdown-ish text (20KB from a 500KB
+  Wikipedia page). Agents should prefer extract over eval for reading.
+- Per-session proxy ships as `SessionOptions.proxy` (`--proxy` on CLI,
+  `browser_open {proxy}` in MCP) — the answer to IP-reputation walls.
 - Dogfood findings (real web): Wikipedia/HN/GitHub/Bing flows work
   end-to-end. DuckDuckGo hard-walls automation (CAPTCHA on html endpoint,
   empty JS shell on main) even WITH a stealth profile — their detection is

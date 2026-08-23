@@ -127,6 +127,17 @@ fn default_path() -> String {
     "/".to_string()
 }
 
+/// Readable main-content extraction of a page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Extracted {
+    pub title: String,
+    pub url: String,
+    /// Main-content text, headings preserved as markdown-style lines.
+    pub text: String,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 /// A tool declared by a page via the emerging WebMCP standard
 /// (`navigator.modelContext`). Present only on pages that opt in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
