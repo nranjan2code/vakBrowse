@@ -49,7 +49,9 @@ capability once, all five surfaces get it.
   `--stealth` and `--proxy`; `extract` action returning clean readable
   article text; tagged releases shipping binaries.
 
-45 tests green, clippy clean. Honest bot-wall findings: Bing works,
+45 tests green, clippy clean. Hardened for CI reality: launch args verified
+against chromiumoxide's double-dash footgun, sandbox auto-fallback for
+root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing works,
 DuckDuckGo CAPTCHAs automation regardless of fingerprint (their detection
 is TLS/behavioral). See `AGENTS.md` for the full map and conventions.
 

@@ -15,9 +15,12 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
 2. **Engine seam is sacred.** All capabilities go through
    `crates/vakbrowse-engine/src/lib.rs` traits (`EngineLauncher`, `PageOps`).
    Never leak CDP/chromiumoxide types outside the engine crate.
-3. **Sandbox stays on** — except when running as root (CI/Docker), where
-   Chromium's sandbox cannot operate; `cdp.rs` auto-detects uid 0 and adds
-   `--no-sandbox` with a warning. Never add it by configuration.
+3. **Sandbox stays on, with automatic fallback.** Chromium's sandbox cannot
+   operate as root (CI/Docker) — `cdp.rs` detects uid 0 and opts out with a
+   warning. Additionally, hardened runners (GitHub ubuntu images restrict
+   unprivileged user namespaces) reject the sandbox even for non-root: on a
+   sandbox/zygote/namespace launch error we retry once with `--no-sandbox`.
+   Never disable the sandbox by configuration alone.
 4. **chromiumoxide arg format**: `BrowserConfig::arg()` takes BARE keys —
    it prepends `--` itself (`format!("--{key}")`). Passing `"--flag"`
    produces `----flag`, which Chromium silently ignores (this shipped
@@ -25,9 +28,20 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
    `push_arg()` in `cdp.rs`. Under stealth profiles we also call
    `disable_default_args()` to drop chromiumoxide's `--enable-automation`
    default.
-5. **URL policy gate.** Every navigation passes `validate_url`
+5. **Verify on linux before trusting green locally.** This repo has shipped
+   two mac-only-invisible bugs; the fastest local check is a
+   `linux/amd64` container run as root *and* as a non-root user:
+   ```sh
+   docker run --rm -it --platform linux/amd64 -v "$PWD":/src -w /src \
+     rust:1-bookworm bash -c "cargo test --workspace"
+   ```
+6. **CI runs can fail instantly with a billing annotation** ("recent account
+   payments have failed or your spending limit needs to be increased").
+   That is account-level (private repos meter Actions minutes), not code —
+   check github.com/settings/billing, then `gh run rerun <id>`.
+7. **URL policy gate.** Every navigation passes `validate_url`
    (http/https/file/about/data only). Extend deliberately.
-6. **Token efficiency is a feature.** Perception output targets <500 tokens
+8. **Token efficiency is a feature.** Perception output targets <500 tokens
    per typical page snapshot.
 
 ## Build & verify (run from repo root)
@@ -134,7 +148,9 @@ bins/
 - `fill` focuses the element before setting its value; the human pattern
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
 - History actions (`back`/`forward`/`reload`) wait for navigation and
-  tolerate the old execution context dying mid-reload.
+  tolerate two races: the old execution context dying mid-reload, and
+  `wait_for_navigation` rejecting with "Inspected target navigated or
+  closed" (which means the navigation succeeded).
 - `extract` is the token-cheap reading tool: readability-style main-content
   extraction returning title/url/markdown-ish text (20KB from a 500KB
   Wikipedia page). Agents should prefer extract over eval for reading.
