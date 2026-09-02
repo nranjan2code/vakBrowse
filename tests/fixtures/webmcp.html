@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>WebMCP Fixture</title></head>
+  <body>
+    <p id="out">ready</p>
+    <script>
+      // Minimal in-page model context surface (the emerging
+      // navigator.modelContext contract). Tools return via Promise.
+      navigator.modelContext = {
+        listTools: () => Promise.resolve([
+          { name: 'greet', description: 'say hello' },
+        ]),
+        callTool: (name, args) => {
+          if (name === 'greet') {
+            return Promise.resolve({ result: 'hello ' + (args && args.who ? args.who : 'nobody') });
+          }
+          return Promise.reject(new Error('unknown tool: ' + name));
+        },
+      };
+    </script>
+  </body>
+</html>

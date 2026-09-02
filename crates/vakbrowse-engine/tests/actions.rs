@@ -6,6 +6,8 @@ use url::Url;
 use vakbrowse_core::{ElementRef, VakError};
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -28,6 +30,7 @@ fn find<'a>(
 
 #[tokio::test]
 async fn snapshot_exposes_stable_refs() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 
@@ -53,6 +56,7 @@ async fn snapshot_exposes_stable_refs() {
 
 #[tokio::test]
 async fn fill_select_click_wait_roundtrip() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("form.html")).await.unwrap();
@@ -93,6 +97,7 @@ async fn fill_select_click_wait_roundtrip() {
 
 #[tokio::test]
 async fn cookies_and_downloads_configurable() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
@@ -105,6 +110,7 @@ async fn cookies_and_downloads_configurable() {
         path: "/".into(),
         secure: false,
         http_only: false,
+        same_site: Some("Strict".into()),
     }).await.unwrap();
 
     // file:// origin doesn't expose example.com cookies; read them via CDP-level list.

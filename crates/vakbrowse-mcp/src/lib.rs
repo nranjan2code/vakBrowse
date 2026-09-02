@@ -16,7 +16,9 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use vakbrowse_core::{ProfileId, SessionId};
-use vakbrowse_server::{Action, Policy, Request, ResponsePayload, SessionManager};
+use vakbrowse_server::{
+    Action, ActionResult, Policy, Request, ResponsePayload, SessionManager,
+};
 
 fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> JsonObject {
     let mut properties = serde_json::Map::new();
@@ -283,7 +285,7 @@ impl Default for VakMcp {
 impl VakMcp {
     pub fn new(policy: Policy) -> Self {
         Self {
-            manager: Arc::new(SessionManager::new(policy)),
+            manager: Arc::new(SessionManager::with_policy(policy)),
         }
     }
 
@@ -294,11 +296,27 @@ impl VakMcp {
         args: Option<&JsonObject>,
     ) -> Result<CallToolResult, McpError> {
         let request = self.map_tool(name, args)?;
-        match self.manager.handle(request).await {
+        let response = self.manager.handle(request).await;
+        match response {
+            // Transport-level panic that escaped the handler (UDS path only;
+            // the in-process MCP path surfaces app errors as Ok(Error)).
+            Err(err) => Err(McpError::internal_error(err, None)),
+            Ok(ResponsePayload::Error(e)) => {
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "{e}"
+                ))]))
+            }
+            // Vision fallback: hand the agent the raw pixels, not a placeholder
+            // string, so screenshot-driven click_at loops actually work.
+            Ok(ResponsePayload::Result(ActionResult::Image { png_base64 })) => Ok(
+                CallToolResult::success(vec![ContentBlock::image(
+                    png_base64.clone(),
+                    "image/png",
+                )]),
+            ),
             Ok(payload) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 render_payload(&payload),
             )])),
-            Err(err) => Ok(CallToolResult::error(vec![ContentBlock::text(err)])),
         }
     }
 
@@ -514,6 +532,7 @@ fn render_payload(p: &ResponsePayload) -> String {
                 }
             }
         },
+        ResponsePayload::Error(e) => format!("error: {e}"),
     }
 }
 

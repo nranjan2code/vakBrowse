@@ -7,6 +7,8 @@ use url::Url;
 use vakbrowse_core::ElementRef;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -18,6 +20,7 @@ fn fixture_url(name: &str) -> String {
 
 #[tokio::test]
 async fn tabs_open_switch_close_and_keep_separate_state() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 
@@ -49,6 +52,7 @@ async fn tabs_open_switch_close_and_keep_separate_state() {
 
 #[tokio::test]
 async fn elements_inside_iframes_get_refs_and_click_through() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 

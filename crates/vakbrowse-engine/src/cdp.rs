@@ -55,6 +55,36 @@ fn is_root() -> bool {
     (unsafe { libc::geteuid() }) == 0
 }
 
+/// Heuristic: did Chromium fail to launch *because of its sandbox*?
+///
+/// Root cause is always one of: an explicit sandbox/zygote/namespace
+/// diagnostic, or chrome exiting before the WebSocket URL prints. The
+/// non-root case is subtle: Chromium fires `FATAL: ... No usable sandbox!
+/// ...` and exits, but when captured through chromiumoxide's pipe that
+/// stderr is often empty — so the error string is just "Browser process
+/// exited ... before websocket URL could be resolved, stderr: BrowserStderr(\"\")".
+///
+/// We only classify the *silent* early-exit (empty stderr) as sandbox-suspect
+/// because genuine failures still leave a trace: a missing binary yields
+/// `No such file or directory`, a missing shared library yields the loader's
+/// `error while loading shared libraries`. Those are excluded so we never
+/// mask a real misconfiguration behind a `--no-sandbox` retry.
+fn is_sandbox_launch_failure(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    if lower.contains("sandbox") || lower.contains("zygote") || lower.contains("namespace") {
+        return true;
+    }
+    if msg.contains("BrowserStderr(\"\")")
+        && (msg.contains("before websocket URL could be resolved")
+            || msg.contains("resolving websocket URL from browser process"))
+        && !lower.contains("no such file or directory")
+        && !lower.contains("error while loading shared libraries")
+    {
+        return true;
+    }
+    false
+}
+
 /// Default hardening flags applied to every launch. Deliberately NOT
 /// including `--no-sandbox`; sandboxing stays on and is the caller's
 /// environment responsibility.
@@ -105,6 +135,7 @@ impl CdpLauncher {
     }
 }
 
+#[async_trait::async_trait]
 impl EngineLauncher for CdpLauncher {
     fn name(&self) -> &'static str {
         "chrome-headless-shell/cdp"
@@ -190,15 +221,11 @@ impl EngineLauncher for CdpLauncher {
         let (browser, mut handler) = match launched {
             Ok(ok) => ok,
             Err(e) => {
-                // Hardened environments (CI runners, hardened kernels) often
+                // Hardened environments (CI runners, Docker containers) often
                 // cannot run Chromium's setuid/userns sandbox at all. Retry
                 // once without the sandbox rather than failing the session.
                 let msg = e.to_string();
-                let sandbox_culprit = msg.contains("sandbox")
-                    || msg.contains("Sandbox")
-                    || msg.contains("zygote")
-                    || msg.to_lowercase().contains("namespace");
-                if !sandbox_culprit {
+                if !is_sandbox_launch_failure(&msg) {
                     return Err(proto_err(e));
                 }
                 tracing::warn!(
@@ -607,6 +634,57 @@ impl CdpSession {
             .map_err(proto_err)?;
         Ok(resp.result.result.value.unwrap_or(serde_json::Value::Null))
     }
+
+    /// Call `function_declaration(this, ...args)` on the global object with
+    /// structured JSON arguments — never string-interpolating caller data into
+    /// JS source. Used for WebMCP invocation; resolves the global object's
+    /// remote id and dispatches via `Runtime.callFunctionOn`.
+    async fn call_on_global(
+        &self,
+        function_declaration: &str,
+        args: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let page = &self.tab().page;
+        let win = page
+            .execute(
+                EvaluateParams::builder()
+                    .expression("globalThis")
+                    .return_by_value(false)
+                    .build()
+                    .map_err(proto_err)?,
+            )
+            .await
+            .map_err(proto_err)?;
+        let object_id = win
+            .result
+            .result
+            .object_id
+            .ok_or_else(|| VakError::Protocol("globalThis has no objectId".into()))?;
+        let call_args: Vec<CallArgument> = args
+            .into_iter()
+            .map(|v| CallArgument {
+                value: Some(v),
+                ..Default::default()
+            })
+            .collect();
+        let resp = page
+            .execute(
+                CallFunctionOnParams::builder()
+                    .function_declaration(function_declaration)
+                    .object_id(object_id)
+                    .arguments(call_args)
+                    .return_by_value(true)
+                    .await_promise(true)
+                    .build()
+                    .map_err(proto_err)?,
+            )
+            .await
+            .map_err(proto_err)?;
+        if resp.result.exception_details.is_some() {
+            return Err(VakError::Protocol("callFunctionOn threw".into()));
+        }
+        Ok(resp.result.result.value.unwrap_or(serde_json::Value::Null))
+    }
 }
 
 const SET_VALUE_JS: &str = r#"
@@ -875,20 +953,29 @@ impl PageOps for CdpSession {
                 secure: c.secure,
                 http_only: c.http_only,
                 session: c.session,
+                same_site: c.same_site.map(|s| s.as_ref().to_string()),
             })
             .collect())
     }
 
     async fn set_cookie(&mut self, cookie: &CookieInput) -> Result<()> {
-        let param = CookieParam::builder()
+        let mut builder = CookieParam::builder()
             .name(cookie.name.clone())
             .value(cookie.value.clone())
             .domain(cookie.domain.clone())
             .path(cookie.path.clone())
             .secure(cookie.secure)
-            .http_only(cookie.http_only)
-            .build()
-            .map_err(proto_err)?;
+            .http_only(cookie.http_only);
+        if let Some(ss) = &cookie.same_site {
+            builder = match ss.parse::<chromiumoxide::cdp::browser_protocol::network::CookieSameSite>() {
+                Ok(v) => builder.same_site(v),
+                Err(_) => {
+                    tracing::warn!(same_site = %ss, "unrecognized SameSite value; ignoring");
+                    builder
+                }
+            };
+        }
+        let param = builder.build().map_err(proto_err)?;
         self.tab()
             .page
             .execute(SetCookiesParams::builder().cookies(vec![param]).build().map_err(proto_err)?)
@@ -984,25 +1071,33 @@ impl PageOps for CdpSession {
         let args: serde_json::Value = serde_json::from_str(arguments_json)
             .map_err(|e| VakError::Engine(format!("arguments_json: {e}")))?;
         let args = if args.is_null() { serde_json::json!({}) } else { args };
-        let js = format!(
-            r#"(() => {{
-              const mc = navigator.modelContext;
-              if (!mc || typeof mc.callTool !== 'function')
-                throw new Error('webmcp unavailable on this page');
-              return Promise.resolve(mc.callTool({name}, {args})).then(v => JSON.stringify(v));
-            }})()"#,
-            name = serde_json::json!(name),
-            args = args,
-        );
-        match self.evaluate_json_on(&self.tab().page, &js).await {
-            Ok(v) => Ok(match v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            }),
-            Err(_) => Err(VakError::Unsupported(format!(
-                "WebMCP tool {name:?} not invokable (feature or tool absent)"
-            ))),
-        }
+
+        // The function is a fixed template; `name` and `args` are passed as
+        // structured CDP call arguments (never interpolated into JS source),
+        // so page/agent-supplied tool names cannot inject JS.
+        let v = match self
+            .call_on_global(
+                "function(name, args) { \
+                  const mc = navigator.modelContext; \
+                  if (!mc || typeof mc.callTool !== 'function') \
+                    throw new Error('webmcp unavailable on this page'); \
+                  return Promise.resolve(mc.callTool(name, args)).then(v => JSON.stringify(v)); \
+                }",
+                vec![serde_json::json!(name), args],
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(VakError::Unsupported(format!(
+                    "WebMCP tool {name:?} not invokable ({e})"
+                )));
+            }
+        };
+        Ok(match v {
+            serde_json::Value::String(s) => s,
+            other => other.to_string(),
+        })
     }
 
     async fn extract(&mut self) -> Result<Extracted> {

@@ -139,9 +139,14 @@ pub fn mouse_path(from: (f64, f64), to: (f64, f64), seed: u64, steps: usize) -> 
 }
 
 /// Default hardened launch flags for stealthy runs.
+///
+/// Site isolation is intentionally *not* disabled — disabling it breaks the
+/// cross-frame a11y snapshot merge (frames render under different
+/// SiteInstance/origin expectations) and modern Chromium no longer needs it
+/// to defeat `navigator.webdriver`. Keeping it lets iframe perception and
+/// frame-scoped clicks stay correct.
 pub const STEALTH_ARGS: &[&str] = &[
     "--disable-blink-features=AutomationControlled",
-    "--disable-features=IsolateOrigins,site-per-process",
     "--no-default-browser-check",
     "--start-maximized",
 ];

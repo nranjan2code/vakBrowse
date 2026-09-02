@@ -202,6 +202,10 @@ fn act(session: String, action: Action) -> Request {
 
 fn render(response: vakbrowse_server::Response) -> Result<String, i32> {
     match response {
+        Ok(vakbrowse_server::ResponsePayload::Error(e)) => {
+            eprintln!("error: {}", e);
+            Err(1)
+        }
         Ok(payload) => Ok(render_payload(payload)),
         Err(err) => {
             eprintln!("error: {err}");
@@ -275,6 +279,7 @@ fn render_payload(p: ResponsePayload) -> String {
                 }
             }
         },
+        ResponsePayload::Error(e) => format!("error: {e}"),
     }
 }
 

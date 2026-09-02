@@ -129,6 +129,57 @@ pub enum Request {
     Act { session: SessionId, action: Action },
 }
 
+/// Wire-level classification of an application error, preserving the
+/// `VakError` discriminant so transports (HTTP/MCP/CLI) can map status
+/// codes without string-matching an opaque message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ServiceError {
+    Engine(String),
+    Protocol(String),
+    Perception(String),
+    Policy(String),
+    NotFound(String),
+    Http(String),
+    Unsupported(String),
+    Timeout(String),
+    Io(String),
+}
+
+impl std::fmt::Display for ServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (kind, msg) = match self {
+            ServiceError::Engine(m) => ("engine", m),
+            ServiceError::Protocol(m) => ("protocol", m),
+            ServiceError::Perception(m) => ("perception", m),
+            ServiceError::Policy(m) => ("policy", m),
+            ServiceError::NotFound(m) => ("not found", m),
+            ServiceError::Http(m) => ("http", m),
+            ServiceError::Unsupported(m) => ("unsupported", m),
+            ServiceError::Timeout(m) => ("timeout", m),
+            ServiceError::Io(m) => ("io", m),
+        };
+        write!(f, "{kind}: {msg}")
+    }
+}
+
+impl std::error::Error for ServiceError {}
+
+impl From<VakError> for ServiceError {
+    fn from(e: VakError) -> Self {
+        match e {
+            VakError::Engine(s) => ServiceError::Engine(s),
+            VakError::Protocol(s) => ServiceError::Protocol(s),
+            VakError::Perception(s) => ServiceError::Perception(s),
+            VakError::Policy(s) => ServiceError::Policy(s),
+            VakError::NotFound(s) => ServiceError::NotFound(s),
+            VakError::Http(s) => ServiceError::Http(s),
+            VakError::Io(e) => ServiceError::Io(e.to_string()),
+            VakError::Unsupported(s) => ServiceError::Unsupported(s),
+            VakError::Timeout(s) => ServiceError::Timeout(s),
+        }
+    }
+}
+
 /// Externally tagged (default serde) — internally-tagged representation
 /// cannot encode `Closed(bool)` (primitive newtype under a tag).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +188,10 @@ pub enum ResponsePayload {
     Closed(bool),
     Sessions(Vec<SessionInfo>),
     Result(ActionResult),
+    /// Application-level error (the request was well-formed but the action
+    /// failed). Transport-level failures (panic in handler, encode errors)
+    /// stay on the `Err(String)` arm of `Response`.
+    Error(ServiceError),
 }
 
 pub type Response = std::result::Result<ResponsePayload, String>;
@@ -203,7 +258,10 @@ impl Default for PoolConfig {
 /// Owns all live sessions; drives engine launches and action dispatch.
 pub struct SessionManager {
     sessions: Mutex<HashMap<SessionId, ManagedSession>>,
-    launcher: CdpLauncher,
+    /// Trait object so the engine backend is a plug-in: a non-CDP backend
+    /// injects itself via `SessionManager::new(policy, launcher)`. The CDP
+    /// shell remains the zero-argument convenience default.
+    launcher: Arc<dyn EngineLauncher>,
     policy: Policy,
     pool: PoolConfig,
     profiles_root: Option<PathBuf>,
@@ -212,20 +270,33 @@ pub struct SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new(Policy::default())
+        Self::new(Policy::default(), default_launcher())
     }
 }
 
+/// The out-of-the-box engine: a managed chrome-headless-shell via CDP.
+fn default_launcher() -> Arc<dyn EngineLauncher> {
+    Arc::new(CdpLauncher::default())
+}
+
 impl SessionManager {
-    pub fn new(policy: Policy) -> Self {
+    /// Construct with an explicit engine launcher (swap-in point for other
+    /// backends). Use `SessionManager::default()` / `SessionManager::new(policy)`
+    /// for the default CDP backend.
+    pub fn new(policy: Policy, launcher: Arc<dyn EngineLauncher>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            launcher: CdpLauncher::default(),
+            launcher,
             policy,
             pool: PoolConfig::default(),
             profiles_root: default_profiles_root(),
             next_id: Mutex::new(0),
         }
+    }
+
+    /// Convenience: `new` wired to the default CDP launcher.
+    pub fn with_policy(policy: Policy) -> Self {
+        Self::new(policy, default_launcher())
     }
 
     pub fn with_pool(mut self, pool: PoolConfig) -> Self {
@@ -390,8 +461,21 @@ impl SessionManager {
         let (page_arc, _profile) = entry;
         let mut page = page_arc.lock().await;
 
-        if let Action::Navigate { url } = &action {
-            self.policy.check(url)?;
+        // Gate every navigation through the URL policy. `NewTab` with an
+        // inline URL is the same class of move as `Navigate` — it must not
+        // bypass the allowlist.
+        match &action {
+            Action::Navigate { url } | Action::NewTab { url: Some(url) } => {
+                self.policy.check(url)?;
+            }
+            _ => {}
+        }
+
+        // Refresh the activity tick *before* the action runs, so a long
+        // action (e.g. wait_for_truthy) cannot be reaped mid-flight by the
+        // idle reaper. The tick before lock held by page_arc is cheap.
+        if let Some(s) = self.sessions.lock().await.get_mut(id) {
+            s.last_active = std::time::Instant::now();
         }
 
         let result = match action {
@@ -469,6 +553,11 @@ impl SessionManager {
             Action::Tabs => ActionResult::Tabs { tabs: page.tabs().await? },
             Action::NewTab { url } => {
                 let tab = page.new_tab(url.as_deref()).await?;
+                // New tab becomes active; keep the session-level URL shadow
+                // in sync so `list()`/Status report the right page.
+                if let Some(st) = self.sessions.lock().await.get_mut(id) {
+                    st.current_url = tab.url.clone();
+                }
                 ActionResult::TabOpened { tab }
             }
             Action::SwitchTab { tab } => {
@@ -479,16 +568,10 @@ impl SessionManager {
 
             Action::Back => {
                 let nav = page.back().await?;
-                if let Some(st) = self.sessions.lock().await.get_mut(id) {
-                    st.current_url = nav.url.clone();
-                }
                 ActionResult::Navigated { url: nav.url, title: nav.title }
             }
             Action::Forward => {
                 let nav = page.forward().await?;
-                if let Some(st) = self.sessions.lock().await.get_mut(id) {
-                    st.current_url = nav.url.clone();
-                }
                 ActionResult::Navigated { url: nav.url, title: nav.title }
             }
             Action::Extract => {
@@ -497,9 +580,6 @@ impl SessionManager {
             }
             Action::Reload => {
                 let nav = page.reload().await?;
-                if let Some(st) = self.sessions.lock().await.get_mut(id) {
-                    st.current_url = nav.url.clone();
-                }
                 ActionResult::Navigated { url: nav.url, title: nav.title }
             }
         };
@@ -510,32 +590,31 @@ impl SessionManager {
             s.current_url = url.clone();
         }
 
-        // Activity feeds the idle reaper.
-        if let Some(s) = self.sessions.lock().await.get_mut(id) {
-            s.last_active = std::time::Instant::now();
-        }
         Ok(result)
     }
 
     /// Single entry point used by every transport (uds, mcp, tests).
+    /// Always returns `Ok(...)` for well-formed requests; application errors
+    /// are carried on `Ok(ResponsePayload::Error)` so transports can map the
+    /// error *kind* to HTTP/MCP status. The `Err(String)` arm is reserved
+    /// for handler panics that surface as a 500-style internal error.
     pub async fn handle(&self, request: Request) -> Response {
-        match request {
+        let payload = match request {
             Request::Open { options } => match self.open(options).await {
-                Ok((info, _)) => Ok(ResponsePayload::Opened(info)),
-                Err(e) => Err(e.to_string()),
+                Ok((info, _)) => ResponsePayload::Opened(info),
+                Err(e) => ResponsePayload::Error(e.into()),
             },
-            Request::Close { session } => self
-                .close(&session)
-                .await
-                .map(ResponsePayload::Closed)
-                .map_err(|e| e.to_string()),
-            Request::ListSessions => Ok(ResponsePayload::Sessions(self.list().await)),
-            Request::Act { session, action } => self
-                .act(&session, action)
-                .await
-                .map(ResponsePayload::Result)
-                .map_err(|e| e.to_string()),
-        }
+            Request::Close { session } => match self.close(&session).await {
+                Ok(removed) => ResponsePayload::Closed(removed),
+                Err(e) => ResponsePayload::Error(e.into()),
+            },
+            Request::ListSessions => ResponsePayload::Sessions(self.list().await),
+            Request::Act { session, action } => match self.act(&session, action).await {
+                Ok(result) => ResponsePayload::Result(result),
+                Err(e) => ResponsePayload::Error(e.into()),
+            },
+        };
+        Ok(payload)
     }
 }
 

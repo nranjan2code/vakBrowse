@@ -7,6 +7,8 @@ use url::Url;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 use vakbrowse_stealth::StealthProfile;
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -18,6 +20,7 @@ fn fixture_url(name: &str) -> String {
 
 #[tokio::test]
 async fn stealth_patches_navigator_and_sets_identity() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let profile = StealthProfile::generate("test-agent");
     let launcher = CdpLauncher::default();
     let mut session = launcher
@@ -45,6 +48,7 @@ async fn stealth_patches_navigator_and_sets_identity() {
 
 #[tokio::test]
 async fn without_stealth_webdriver_is_exposed() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("hello.html")).await.unwrap();
@@ -55,6 +59,7 @@ async fn without_stealth_webdriver_is_exposed() {
 
 #[tokio::test]
 async fn screenshot_returns_valid_png() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("hello.html")).await.unwrap();
@@ -68,6 +73,7 @@ async fn screenshot_returns_valid_png() {
 
 #[tokio::test]
 async fn click_at_coordinates_submits_form() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("form.html")).await.unwrap();

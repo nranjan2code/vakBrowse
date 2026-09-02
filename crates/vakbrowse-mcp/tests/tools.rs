@@ -4,8 +4,17 @@
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use url::Url;
 use vakbrowse_mcp::VakMcp;
+
+/// Chrome launch is heavy and contends for OS resources in constrained
+/// containers; serialize browser-launching integration tests within this
+/// binary so parallel `cargo test` stays green on Linux.
+fn browser_lock() -> &'static tokio::sync::Semaphore {
+    static LOCK: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
 
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,8 +45,22 @@ fn text_of(result: CallToolResult) -> String {
         .join("\n")
 }
 
+/// Collect base64-encoded image data from an `Image` content block, proving
+/// screenshot tooling hands back real pixels (not a placeholder string).
+fn image_of(result: &CallToolResult) -> Option<String> {
+    result
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            ContentBlock::Image(i) => Some(i.data.clone()),
+            _ => None,
+        })
+        .next()
+}
+
 #[tokio::test]
 async fn full_agent_flow_through_mcp_tools() {
+    let _g = browser_lock().acquire().await.unwrap();
     let server = VakMcp::default();
 
     // open + navigate
@@ -127,4 +150,36 @@ async fn sessions_listing_roundtrip() {
     let out = server.tool_call("browser_sessions", None).await.unwrap();
     let text = text_of(out);
     assert!(text.contains("(no sessions)") || text.starts_with('s'));
+}
+
+#[tokio::test]
+async fn browser_screenshot_returns_real_png_blob() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let server = VakMcp::default();
+    let out = server
+        .tool_call(
+            "browser_open",
+            args(&[("url", json!(fixture_url("form.html")))]).as_ref(),
+        )
+        .await
+        .expect("open");
+    let session = text_of(out).split(' ').nth(1).unwrap().to_string();
+
+    let out = server
+        .tool_call(
+            "browser_screenshot",
+            args(&[("session", json!(&session))]).as_ref(),
+        )
+        .await
+        .expect("screenshot");
+    let b64 = image_of(&out).expect("screenshot must return an Image content block");
+    assert!(!b64.is_empty(), "blob must not be empty");
+    // The base64 encoding of the 8-byte PNG signature is the canonical
+    // header `iVBORw0KGgo` (the trailing `=` is end-of-stream padding and
+    // never appears mid-string, so it's omitted). Confirms real raster bytes,
+    // not a placeholder string like "(screenshot)".
+    assert!(
+        b64.starts_with("iVBORw0KGgo"),
+        "screenshot did not start with PNG signature, got: {b64}"
+    );
 }

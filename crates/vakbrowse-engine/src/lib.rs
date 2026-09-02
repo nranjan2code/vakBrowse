@@ -111,19 +111,18 @@ pub struct Navigated {
     pub title: String,
 }
 
-/// Factory for pages. Implemented by each backend.
+/// Factory for pages. Implemented by each backend and held by the session
+/// manager as a trait object so the CDP backend is a plug-in, not a baked-in
+/// dependency — a different backend crates a different `EngineLauncher` and
+/// injects it via `SessionManager::new`.
+#[async_trait::async_trait]
 pub trait EngineLauncher: Send + Sync {
     fn name(&self) -> &'static str;
     /// Ensure an engine binary exists locally, returning its path
     /// (downloading/pinning if supported and needed).
-    fn ensure_executable(
-        &self,
-    ) -> impl std::future::Future<Output = Result<PathBuf>> + Send;
+    async fn ensure_executable(&self) -> Result<PathBuf>;
     /// Start a browser and open a first page.
-    fn launch(
-        &self,
-        options: &LaunchOptions,
-    ) -> impl std::future::Future<Output = Result<Box<dyn PageOps>>> + Send;
+    async fn launch(&self, options: &LaunchOptions) -> Result<Box<dyn PageOps>>;
 }
 
 /// Helper used by backends to validate URLs before handing them to a real

@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use url::Url;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -16,6 +18,7 @@ fn fixture_url(name: &str) -> String {
 
 #[tokio::test]
 async fn navigates_local_fixture_and_reads_dom() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher
         .launch(&LaunchOptions {

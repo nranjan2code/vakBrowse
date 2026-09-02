@@ -106,6 +106,9 @@ pub struct Cookie {
     pub http_only: bool,
     #[serde(default)]
     pub session: bool,
+    /// "Strict" | "Lax" | "None" — None means "unspecified".
+    #[serde(default)]
+    pub same_site: Option<String>,
 }
 
 /// A cookie an agent may set (write shape).
@@ -121,6 +124,11 @@ pub struct CookieInput {
     pub secure: bool,
     #[serde(default)]
     pub http_only: bool,
+    /// "Strict" | "Lax" | "None". Setting it is required for cross-site
+    /// cookies; Chromium rejects same-site-undefined cookies in restricted
+    /// modes, so agents must be explicit when they need cross-site.
+    #[serde(default)]
+    pub same_site: Option<String>,
 }
 
 fn default_path() -> String {

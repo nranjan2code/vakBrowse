@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use url::Url;
 use vakbrowse_core::{ProfileId, SessionId};
 use vakbrowse_server::{
-    Action, ActionResult, Policy, Request, ResponsePayload, SessionManager, SessionOptions,
+    Action, ActionResult, Policy, Request, ResponsePayload, ServiceError, SessionManager,
+    SessionOptions,
 };
 
 fn fixture_url(name: &str) -> String {
@@ -97,10 +98,10 @@ async fn open_navigate_snapshot_act() {
 
 #[tokio::test]
 async fn policy_blocks_navigation() {
-    let manager = SessionManager::new(Policy {
+    let manager = SessionManager::with_policy(Policy {
         url_allow_prefixes: vec!["https://allowed.example/".into()],
     });
-    let err = manager
+    let resp = manager
         .handle(Request::Open {
             options: SessionOptions {
                 url: Some("https://blocked.example/page".into()),
@@ -108,21 +109,27 @@ async fn policy_blocks_navigation() {
             },
         })
         .await
-        .expect_err("policy must block");
-    assert!(err.contains("allowlist"), "{err}");
+        .unwrap();
+    assert!(
+        matches!(resp, ResponsePayload::Error(ServiceError::Policy(_))),
+        "expected policy error, got {resp:?}"
+    );
 }
 
 #[tokio::test]
 async fn unknown_session_is_clean_error() {
     let manager = SessionManager::default();
-    let result = manager
+    let resp = manager
         .handle(Request::Act {
             session: SessionId::new("nope"),
             action: Action::Snapshot,
         })
         .await
-        .unwrap_err();
-    assert!(result.contains("unknown session"), "{result}");
+        .unwrap();
+    assert!(
+        matches!(resp, ResponsePayload::Error(ServiceError::NotFound(_))),
+        "expected not-found error, got {resp:?}"
+    );
 }
 
 #[tokio::test]

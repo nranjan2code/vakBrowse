@@ -1,6 +1,8 @@
 //! Pool behavior: session cap enforcement and idle reaping.
 
-use vakbrowse_server::{PoolConfig, Request, ResponsePayload, SessionManager};
+use vakbrowse_server::{
+    PoolConfig, Request, ResponsePayload, ServiceError, SessionManager,
+};
 
 #[tokio::test]
 async fn max_sessions_cap_is_enforced() {
@@ -19,13 +21,16 @@ async fn max_sessions_cap_is_enforced() {
         assert!(matches!(r, ResponsePayload::Opened(_)), "open #{i}");
     }
 
-    let err = manager
+    let resp = manager
         .handle(Request::Open {
             options: Default::default(),
         })
         .await
-        .expect_err("third open must hit the cap");
-    assert!(err.contains("cap reached"), "{err}");
+        .unwrap();
+    assert!(
+        matches!(resp, ResponsePayload::Error(ServiceError::Policy(_))),
+        "expected cap/policy error, got {resp:?}"
+    );
 
     // Closing frees a slot.
     let sessions = manager.list().await;

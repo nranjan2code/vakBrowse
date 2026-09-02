@@ -81,7 +81,7 @@ async fn serve(
     policy: Policy,
     pool: vakbrowse_server::PoolConfig,
 ) -> vakbrowse_core::Result<()> {
-    let manager = Arc::new(SessionManager::new(policy).with_pool(pool));
+    let manager = Arc::new(SessionManager::with_policy(policy).with_pool(pool));
     manager.spawn_reaper();
     let path = std::path::PathBuf::from(socket);
     // Ctrl-C kills the process; the socket file is removed on next start.

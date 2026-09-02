@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use vakbrowse_core::SessionId;
-use vakbrowse_server::{Policy, Request, Response, ResponsePayload, SessionManager};
+use vakbrowse_server::{Policy, Request, Response, ResponsePayload, ServiceError, SessionManager};
 
 #[derive(Clone)]
 struct ApiState {
@@ -34,7 +34,7 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
 
 /// Serve forever on `addr`.
 pub async fn serve(addr: SocketAddr, policy: Policy) -> vakbrowse_core::Result<()> {
-    let app = build_router(Arc::new(SessionManager::new(policy)));
+    let app = build_router(Arc::new(SessionManager::with_policy(policy)));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| vakbrowse_core::VakError::Engine(format!("bind {addr}: {e}")))?;
@@ -52,14 +52,19 @@ async fn health() -> &'static str {
 fn status_for(response: &Response) -> StatusCode {
     match response {
         Ok(ResponsePayload::Opened(_)) => StatusCode::CREATED,
+        Ok(ResponsePayload::Error(e)) => match e {
+            ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
+            ServiceError::Policy(_) => StatusCode::FORBIDDEN,
+            ServiceError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            ServiceError::Http(_) => StatusCode::BAD_GATEWAY,
+            // Engine/Protocol/Perception/Unsupported/Io are caller/action
+            // errors surfaced as 400 (no status-code granularity to give).
+            _ => StatusCode::BAD_REQUEST,
+        },
         Ok(_) => StatusCode::OK,
-        Err(err) if err.contains("unknown session") || err.contains("no backing") => {
-            StatusCode::NOT_FOUND
-        }
-        Err(err) if err.contains("policy") || err.contains("blocked") => {
-            StatusCode::FORBIDDEN
-        }
-        Err(_) => StatusCode::BAD_REQUEST,
+        // Only reachable if the handler panics and is caught as a transport
+        // error by the UDS layer.
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 

@@ -14,7 +14,13 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
    `README.md` status sections as part of any phase/feature, not after.
 2. **Engine seam is sacred.** All capabilities go through
    `crates/vakbrowse-engine/src/lib.rs` traits (`EngineLauncher`, `PageOps`).
-   Never leak CDP/chromiumoxide types outside the engine crate.
+   `SessionManager` holds `Arc<dyn EngineLauncher>` (the trait is
+   `#[async_trait]` object-safe) so the daemon/CLI/MCP/API/FFI surfaces are
+   backend-agnostic; the CDP backend lives in `cdp.rs` and is the sole owner of
+   chromiumoxide/CDP types. Swap backends by injecting a launcher via
+   `SessionManager::new(policy, launcher)`; the convenience
+   `SessionManager::with_policy(policy)` uses the CDP launcher. Never leak
+   CDP/chromiumoxide types outside the engine crate.
 3. **Sandbox stays on, with automatic fallback.** Chromium's sandbox cannot
    operate as root (CI/Docker) — `cdp.rs` detects uid 0 and opts out with a
    warning. Additionally, hardened runners (GitHub ubuntu images restrict
@@ -94,6 +100,13 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
 - Tests must pass and clippy must be clean before declaring work done.
 - Network-dependent tests are marked `#[ignore]`; the offline suite must stay
   hermetic (fixtures under `tests/fixtures/`).
+- Browser-launching integration tests serialize on a shared `common::browser_lock()`
+  semaphore within each test binary: four parallel chrome launches exhaust
+  container resources (especially as non-root, where the sandbox retry thrashes).
+  This keeps `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
+- Verified green on `linux/amd64` as root (sandbox auto-disabled) and as uid 1000
+  (sandbox kept on, auto-falls back to `--no-sandbox` on the non-root sandbox
+  rejection): 48 passed / 2 ignored in both, clippy clean.
 
 ## Architecture map
 
@@ -106,9 +119,12 @@ crates/
   vakbrowse-engine      # EngineLauncher/PageOps traits; backends:
     ├── cft.rs          #   chrome-headless-shell download/pin/cache (Chrome-for-Testing)
     └── cdp.rs          #   CDP backend via chromiumoxide (launch, navigate,
-                        #     click/fill/select/press_key/scroll/wait, cookies, downloads)
+                        #     click/fill/select/press_key/scroll/wait, cookies,
+                        #     downloads, WebMCP list/invoke; args passed as
+                        #     structured CallArgument via call_on_global)
   vakbrowse-server      # SessionManager, Request/Action/Response model, URL policy,
-                        #   snapshot text renderer, UDS wire protocol (serve + client)
+                        #   ServiceError structured wire errors, snapshot renderer,
+                        #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
                         #   24 browser_* tools (tabs, history, screenshot/click-at,
@@ -140,7 +156,10 @@ bins/
   Keep outer enums externally tagged or struct-style variants only.
 - Stealth is honest by design: it defeats `navigator.webdriver` exposure,
   missing plugin/language data and robotic pointer teleports; it does NOT
-  defeat behavioral biometrics or TLS fingerprinting. See stealth crate doc.
+  defeat behavioral biometrics or TLS fingerprinting. Site isolation is
+  intentionally left ON — disabling it (`--disable-features=site-per-process`)
+  only masked bugs in cross-frame perception and is unnecessary against modern
+  Chrome's automation detection. See stealth crate doc.
 - Vision fallback flow for agents: browser_screenshot -> reason over pixels ->
   browser_click_at(x,y). Pair with a11y snapshots first; coords are last resort.
 - Snapshot self-heals: at snapshot time we reconcile against `page.url()`,
@@ -177,6 +196,26 @@ bins/
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),
   zip v8 extraction. CDP gotcha: in `Runtime.callFunctionOn` the resolved DOM
   node arrives as `this`, not as an argument.
+- Error model: `handle()` always returns `Result<ResponsePayload, String>`
+  where app-level failures are `Ok(ResponsePayload::Error(ServiceError))`;
+  `Err(String)` is reserved for handler-panic transport errors. `ServiceError`
+  carries a stable kind (Engine/Protocol/Perception/Policy/NotFound/Timeout/
+  Http/Unsupported/Io) so HTTP/MCP/CLI map errors to codes/status without
+  string matching. `VakError` remains the single in-process taxonomy; engines
+  map native errors into it at the boundary, the server maps it into
+  `ServiceError` at the seam.
+- Cookies carry an optional `samesite` field (`Cookie` + `CookieInput`);
+  `set_cookie` parses it via chromiumoxide's `CookieSameSite` (case-insensitive
+  `FromStr`) and `cookies()` maps it back.
+- Embedding from Python (ctypes) works in-process: the FFI owns a long-lived
+  multi-thread runtime that `block_on`s the shared `SessionManager`; if the
+  caller thread is already inside a tokio runtime, the call is offloaded to a
+  dedicated blocking thread so `block_on` never panics ("cannot block the
+  current thread from within a runtime context"). The runtime stays alive
+  across calls so the CDP event-handler task is never starved.
+- Vision fallback flow for agents: `browser_screenshot` returns real PNG bytes
+  as an MCP `Blob` content block (decode the `iVBORw0KGgo` base64 prefix), not
+  a placeholder string. Pair with a11y snapshots first; coords are last resort.
 
 ## Phase status
 

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use url::Url;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -19,6 +21,7 @@ fn fixture_url(name: &str) -> String {
 
 #[tokio::test]
 async fn click_navigation_self_heals_snapshot_url_and_refs() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 
@@ -45,6 +48,7 @@ async fn click_navigation_self_heals_snapshot_url_and_refs() {
 
 #[tokio::test]
 async fn fill_focuses_so_enter_submits() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("form.html")).await.unwrap();
@@ -71,6 +75,7 @@ async fn fill_focuses_so_enter_submits() {
 
 #[tokio::test]
 async fn history_back_forward_reload() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 

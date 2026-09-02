@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use url::Url;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
+mod common;
+
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures")
@@ -16,6 +18,7 @@ fn fixture_url(name: &str) -> String {
 
 #[tokio::test]
 async fn extract_returns_clean_main_content() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("article.html")).await.unwrap();
@@ -35,6 +38,7 @@ async fn extract_returns_clean_main_content() {
 
 #[tokio::test]
 async fn proxy_flag_launches_and_reaches_a_site() {
+    let _g = common::browser_lock().acquire().await.unwrap();
     // We can't assume an external proxy; verify the launch path accepts the
     // option and browsing still works (proxy arg malformed only breaks
     // networking, not launch).

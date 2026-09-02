@@ -10,8 +10,10 @@ vakBrowse/
 ├── crates/
 │   ├── vakbrowse-core        # domain types, errors, wire shapes
 │   ├── vakbrowse-perception  # a11y tree -> compact snapshots with stable @eN refs
-│   ├── vakbrowse-engine      # Engine trait + CDP backend (chrome-headless-shell),
-│   │                         #   stealth integration, proxy, history, extract
+│   ├── vakbrowse-engine      # EngineLauncher/PageOps traits (object-safe,
+│   │                         #   swap backend via Arc<dyn EngineLauncher>) +
+│   │                         #   CDP backend (chrome-headless-shell), stealth,
+│   │                         #   proxy, history, extract, WebMCP
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
@@ -47,11 +49,16 @@ capability once, all five surfaces get it.
   `--stealth` and `--proxy`; `extract` action returning clean readable
   article text; tagged releases shipping binaries.
 
-45 tests green, clippy clean. Hardened against real environments: launch args verified
+48 tests green, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing works,
 DuckDuckGo CAPTCHAs automation regardless of fingerprint (their detection
-is TLS/behavioral). See `AGENTS.md` for the full map and conventions.
+is TLS/behavioral). Architectural notes: app errors now flow as a
+structured `ServiceError` over the wire (never raw strings), the engine
+seam is `Arc<dyn EngineLauncher>` so the session manager is backend-agnostic,
+MCP `browser_screenshot` returns real PNG pixels (not a placeholder), and the
+FFI embeds a long-lived runtime with a nested-context guard so it works from
+inside a caller tokio loop. See `AGENTS.md` for the full map and conventions.
 
 ## Install (from a release tag)
 

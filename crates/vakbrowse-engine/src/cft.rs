@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use vakbrowse_core::{Result, VakError};
 
@@ -120,7 +120,7 @@ pub async fn ensure_headless_shell(config: &CftConfig) -> Result<CftArtifact> {
     } else {
         // 2. channel marker fast path
         let marker = root.join(format!("{}.version", config.channel));
-        if let Ok(version) = std::fs::read_to_string(&marker) {
+        if let Ok(version) = tokio::fs::read_to_string(&marker).await {
             let version = version.trim();
             let exe = root.join(version).join(platform).join(&rel);
             if exe.is_file() {
@@ -147,17 +147,25 @@ pub async fn ensure_headless_shell(config: &CftConfig) -> Result<CftArtifact> {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&executable)?.permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&executable, perms)?;
+            // chmod is blocking; don't stall the executor.
+            let perm_target = executable.clone();
+            tokio::task::spawn_blocking(move || {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&perm_target)
+                    .map_err(VakError::from)?
+                    .permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&perm_target, perms).map_err(VakError::from)
+            })
+            .await
+            .map_err(|e| VakError::Engine(format!("chmod join: {e}")))??;
         }
     }
 
     if config.pin_version.is_none() {
         let marker = root.join(format!("{}.version", config.channel));
-        let _ = std::fs::create_dir_all(root);
-        let _ = std::fs::write(marker, format!("{version}\n"));
+        let _ = tokio::fs::create_dir_all(root).await;
+        let _ = tokio::fs::write(marker, format!("{version}\n")).await;
     }
 
     tracing::info!(%version, path = %executable.display(), "chrome-headless-shell ready");
@@ -228,7 +236,7 @@ async fn download_and_extract(
     version: &str,
     platform: &str,
 ) -> Result<()> {
-    std::fs::create_dir_all(root)?;
+    tokio::fs::create_dir_all(root).await?;
     let tmp = tempfile::tempdir_in(root)?;
     let zip_path = tmp.path().join("artifact.zip");
 
@@ -242,19 +250,30 @@ async fn download_and_extract(
         return Err(VakError::Http(format!("empty body from {zip_url}")));
     }
     {
-        let mut f = std::fs::File::create(&zip_path)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
+        let zip_path_write = zip_path.clone();
+        tokio::fs::write(&zip_path_write, &bytes)
+            .await
+            .map_err(VakError::from)?;
     }
 
     let dest = root.join(version).join(platform);
-    std::fs::create_dir_all(&dest)?;
-    let file = std::fs::File::open(&zip_path)?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| VakError::Engine(format!("bad zip: {e}")))?;
-    archive
-        .extract(&dest)
-        .map_err(|e| VakError::Engine(format!("zip extract: {e}")))?;
+    tokio::fs::create_dir_all(&dest).await.map_err(VakError::from)?;
+    let zip_path_extract = zip_path.clone();
+    let dest_extract = dest.clone();
+    // ZipArchive::extract is blocking I/O over a large tree; offload it so
+    // the async executor stays responsive for other sessions.
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&zip_path_extract)
+            .map_err(VakError::from)?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| VakError::Engine(format!("bad zip: {e}")))?;
+        archive
+            .extract(&dest_extract)
+            .map_err(|e| VakError::Engine(format!("zip extract: {e}")))?;
+        Ok::<_, VakError>(())
+    })
+    .await
+    .map_err(|e| VakError::Engine(format!("extract join: {e}")))??;
 
     tracing::debug!(dest = %dest.display(), "extracted");
     Ok(())

@@ -4,11 +4,21 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use url::Url;
 use vakbrowse_server::SessionManager;
+
+/// Chrome launch is heavy and contends for OS resources in constrained
+/// containers; serialize browser-launching integration tests within this
+/// binary so parallel `cargo test` stays green on Linux.
+fn browser_lock() -> &'static Semaphore {
+    static LOCK: OnceLock<Semaphore> = OnceLock::new();
+    LOCK.get_or_init(|| Semaphore::new(1))
+}
 
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -35,6 +45,7 @@ async fn spawn_server() -> (SocketAddr, tempfile::TempDir) {
 
 #[tokio::test]
 async fn health_and_open_snapshot_close_over_http() {
+    let _g = browser_lock().acquire().await.unwrap();
     let (addr, _dir) = spawn_server().await;
     let base = format!("http://{addr}");
     let client = reqwest::Client::new();
@@ -73,7 +84,7 @@ async fn health_and_open_snapshot_close_over_http() {
     assert!(elements.iter().any(|e| e["role"] == "link"));
 
     // Policy-free manager allows navigation anywhere.
-    // DNS/engine failure surfaces as Err payload with 400.
+    // DNS/engine failure surfaces as an Error payload mapped to 400.
     let resp = client
         .post(format!("{base}/sessions/{session}/actions"))
         .json(&json!({ "type": "navigate", "url": "https://blocked.invalid/" }))
@@ -82,7 +93,10 @@ async fn health_and_open_snapshot_close_over_http() {
         .unwrap();
     assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert!(body.get("Err").is_some(), "{body}");
+    assert!(
+        body["Ok"]["Error"].is_object(),
+        "expected structured application error, got {body}"
+    );
 
     // Close.
     let resp = client
@@ -95,6 +109,7 @@ async fn health_and_open_snapshot_close_over_http() {
 
 #[tokio::test]
 async fn ws_bridge_roundtrip() {
+    let _g = browser_lock().acquire().await.unwrap();
     let (addr, _dir) = spawn_server().await;
     let (mut ws, _) = tokio_tungstenite_connect(format!("ws://{addr}/ws")).await;
 
@@ -106,7 +121,7 @@ async fn ws_bridge_roundtrip() {
     let reply = recv_ws_text(&mut ws).await;
     let session = reply["Ok"]["Opened"]["id"]
         .as_str()
-        .expect("session id")
+        .unwrap_or_else(|| panic!("session id shape; open reply: {reply}"))
         .to_string();
 
     send_ws_text(
