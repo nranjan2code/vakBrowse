@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Scroll Click</title>
+  </head>
+  <body>
+    <!-- Tall spacer so the link below is rendered off-screen (below the fold)
+         in a default ~800x600 viewport. Clicking it must scroll the page and
+         still navigate; without scroll-into-view the click lands on empty
+         viewport space and silently misses (cf. Bing result links). -->
+    <div style="height:3000px;padding:10px">scroll me...</div>
+    <a href="#target" id="far">far link at bottom</a>
+    <div id="target">target reached</div>
+  </body>
+</html>

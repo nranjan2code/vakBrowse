@@ -49,6 +49,30 @@ fn proto_err(e: impl std::fmt::Display) -> VakError {
     VakError::Protocol(e.to_string())
 }
 
+/// Coerce a JS `Runtime.evaluate` result value into a display string.
+/// Mirrors what a JS REPL prints: strings pass through, primitives stringify,
+/// objects/arrays become JSON. Never fails (unlike deserializing straight
+/// into `String`, which rejects booleans/numbers).
+fn stringify_js(v: serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(f) = n.as_f64() {
+                format!("{}", f)
+            } else {
+                n.to_string()
+            }
+        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            serde_json::to_string(&v).unwrap_or_else(|e| format!("<unserializable value: {e}>"))
+        }
+    }
+}
+
 #[cfg(unix)]
 fn is_root() -> bool {
     // SAFETY: geteuid is always safe to call.
@@ -764,13 +788,31 @@ impl PageOps for CdpSession {
     }
 
     async fn eval_text(&self, expression: &str) -> Result<String> {
-        let result = self
+        // Mirror `evaluate_json_on`: ask for the value by-value and await
+        // promises, then stringify. The convenience `page.evaluate().into_value()`
+        // both (a) crashes on non-string primitives ("invalid type: boolean …")
+        // and (b) errors "No value found" for results whose remote object has no
+        // inline value — which makes the canonical `navigator.webdriver` stealth
+        // check unobservable. Stringifying the raw JSON value fixes both.
+        let resp = self
             .tab()
             .page
-            .evaluate(expression)
+            .execute(
+                EvaluateParams::builder()
+                    .expression(expression)
+                    .return_by_value(true)
+                    .await_promise(true)
+                    .build()
+                    .map_err(proto_err)?,
+            )
             .await
             .map_err(proto_err)?;
-        result.into_value().map_err(proto_err)
+        let value: serde_json::Value = resp
+            .result
+            .result
+            .value
+            .unwrap_or(serde_json::Value::Null);
+        Ok(stringify_js(value))
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot> {
@@ -807,6 +849,19 @@ impl PageOps for CdpSession {
 
         // Root frame: trusted input at page-level coordinates.
         if ax_id.starts_with("f0:") {
+            // Scroll the target into view first. DOM.getBoxModel returns
+            // viewport-relative coords, so an element below the fold (e.g. a
+            // Bing search result) would otherwise be clicked at a viewport
+            // point where nothing is rendered and the click silently misses.
+            // scrollIntoView updates the scroll offset so the fresh box-model
+            // center lands on the visible element.
+            let _ = self
+                .call_on_element(
+                    backend,
+                    "function(){this.scrollIntoView({block:'center'});return true;}",
+                    vec![],
+                )
+                .await;
             let (cx, cy) = self.box_center(backend).await?;
             return self.click_at(cx, cy).await;
         }

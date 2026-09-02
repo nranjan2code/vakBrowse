@@ -44,16 +44,20 @@ capability once, all five surfaces get it.
 - **Depth (P5)** — multi-tab sessions, cross-frame (iframe) perception &
   clicks.
 - **Battle-tested (P6)** — dogfooded live against Wikipedia / Hacker News /
-  GitHub / Bing / DuckDuckGo; fixed snapshot URL self-healing,
-  fill-now-focuses (Enter submits), history actions; per-session
-  `--stealth` and `--proxy`; `extract` action returning clean readable
-  article text; tagged releases shipping binaries.
+  GitHub / example.com (click-through to www.iana.org proven); fixed snapshot URL
+  self-healing, fill-now-focuses (Enter submits), history actions,
+  `eval_text` stringification of all JS return types, scroll-into-view for
+  below-fold clicks; per-session `--stealth` and `--proxy`; `extract` action
+  returning clean readable article text; tagged releases shipping binaries.
 
-48 tests green, clippy clean. Hardened against real environments: launch args verified
+50 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
-root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing works,
-DuckDuckGo CAPTCHAs automation regardless of fingerprint (their detection
-is TLS/behavioral). Architectural notes: app errors now flow as a
+root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
+mouse-event click AND a ground-truth DOM `element.click()` both leave the
+browser on the SERP, even under `--stealth` — their detection is behavioral,
+not webdriver-level), and DuckDuckGo CAPTCHAs / serves an empty shell
+regardless of fingerprint. Search+click-through recipes use Wikipedia and
+example.com. Architectural notes: app errors now flow as a
 structured `ServiceError` over the wire (never raw strings), the engine
 seam is `Arc<dyn EngineLauncher>` so the session manager is backend-agnostic,
 MCP `browser_screenshot` returns real PNG pixels (not a placeholder), and the

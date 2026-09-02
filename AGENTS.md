@@ -106,7 +106,7 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   This keeps `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
 - Verified green on `linux/amd64` as root (sandbox auto-disabled) and as uid 1000
   (sandbox kept on, auto-falls back to `--no-sandbox` on the non-root sandbox
-  rejection): 48 passed / 2 ignored in both, clippy clean.
+  rejection): 50 passed / 2 ignored in both, clippy clean.
 
 ## Architecture map
 
@@ -147,7 +147,17 @@ bins/
   reset on navigation; stale refs return `VakError::NotFound`, never a misfire.
 - Actions use trusted input where it matters: clicks are real
   `Input.dispatchMouseEvent` sequences at box-model centers; fills use the
-  native value setter + input/change events (React/Vue-safe).
+  native value setter + input/change events (React/Vue-safe). Root-frame
+  clicks run `scrollIntoView({block:'center'})` on the target before reading
+  its box-model center, so below-fold elements (long pages, SERP results)
+  actually receive the click instead of being hit at a viewport point past the
+  fold where nothing renders.
+- `eval_text` stringifies every JS return type (JS-REPL semantics): strings
+  pass through, numbers/booleans/undefined stringify, objects/arrays become
+  JSON. This makes the canonical stealth probe `navigator.webdriver` observable
+  (`false` under `--stealth`, `true` otherwise) instead of crashing with
+  "invalid type: boolean …"; likewise `1+2` → `3` and `document.links.length`
+  → the count. (Regression test: `eval_text_coerces_non_string_primitives`.)
 - One command model everywhere: `SessionManager::handle(Request)` serves the
   daemon (UDS newline-JSON), the CLI and MCP tools identically. Add a
   capability ONCE in `Action` + engine trait; every surface gets it.
@@ -160,8 +170,6 @@ bins/
   intentionally left ON — disabling it (`--disable-features=site-per-process`)
   only masked bugs in cross-frame perception and is unnecessary against modern
   Chrome's automation detection. See stealth crate doc.
-- Vision fallback flow for agents: browser_screenshot -> reason over pixels ->
-  browser_click_at(x,y). Pair with a11y snapshots first; coords are last resort.
 - Snapshot self-heals: at snapshot time we reconcile against `page.url()`,
   so click-driven navigations (form submits, SPA links) update the reported
   URL and start a fresh ref turn — even though only explicit navigate()
@@ -178,13 +186,19 @@ bins/
 - Per-session proxy ships as `SessionOptions.proxy` (`--proxy` on CLI,
   `browser_open {proxy}` in MCP) — the answer to IP-reputation walls.
   Proxy *rotation* across a pool of endpoints remains a future idea.
-- Dogfood findings (real web): Wikipedia/HN/GitHub/Bing flows work
-  end-to-end. DuckDuckGo hard-walls automation (CAPTCHA on html endpoint,
-  empty JS shell on main) even WITH a stealth profile — their detection is
-  TLS/behavioral, not webdriver-level. Agent recipe: prefer Bing for search
-  flows. Stealth (`vak open --stealth`, `browser_open {stealth:true}`,
-  seed via `stealth_seed`) defeats webdriver/plugin/pointer tells but not
-  TLS-fingerprint walls.
+- Dogfood findings (real web): Wikipedia/GitHub/example.com/HN flows work
+  end-to-end: a Wikipedia search -> click result lands on the article; an
+  example.com -> click "Learn more" lands on www.iana.org — both proven by
+  the rig parsing the real a11y snapshot to pick the link by name (no hardcoded
+  refs). Bing and DuckDuckGo hard-wall ALL synthetic navigation (even under a
+  `--stealth` profile): DuckDuckGo serves a CAPTCHA/empty shell (TLS/behavioral),
+  and Bing result links (`bing.com/ck/a?...`) refuse to navigate even under a
+  trusted `Input.dispatchMouseEvent` sequence OR a ground-truth DOM
+  `element.click()` — the browser stays on the SERP. Agent recipe: prefer
+  Wikipedia/example.com for search+click-through proofs; treat Bing/DDG as
+  known behavioral limits, not defects. Stealth (`vak open --stealth`,
+  `browser_open {stealth:true}`, seed via `stealth_seed`) defeats
+  webdriver/plugin/pointer tells but NOT TLS-fingerprint or behavioral-nav walls.
 - Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
   per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
   `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the

@@ -121,6 +121,46 @@ async fn cookies_and_downloads_configurable() {
     session.clear_cookies().await.unwrap();
 }
 
+#[tokio::test]
+async fn eval_text_coerces_non_string_primitives() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("form.html")).await.unwrap();
+
+    // A JS expression may return any JSON type. eval_text must stringify it
+    // rather than hard-failing ("invalid type: boolean, expected a string"),
+    // which is how the canonical `navigator.webdriver` stealth check broke.
+    let b = session.eval_text("navigator.webdriver").await.unwrap();
+    assert!(b == "true" || b == "false", "boolean must stringify to true/false, got: {b}");
+    let n = session.eval_text("1 + 2").await.unwrap();
+    assert_eq!(n, "3", "number result must stringify, got: {n}");
+    let z = session.eval_text("null").await.unwrap();
+    assert_eq!(z, "null", "null must stringify, got: {z}");
+    let s = session.eval_text("document.querySelector('form') ? 'has-form' : 'no-form'").await.unwrap();
+    assert_eq!(s, "has-form");
+}
+
+#[tokio::test]
+async fn click_navigates_below_fold_element() {
+    // Regression: root-frame clicks dispatched at viewport coords but did NOT
+    // scroll the target into view first. DOM.getBoxModel returns
+    // viewport-relative coords, so a below-fold element (Bing result links,
+    // long form pages) was clicked at a point where nothing is rendered and
+    // the click silently missed. The fix scrolls the node into view first.
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("scroll_click.html")).await.unwrap();
+
+    let snap = session.snapshot().await.unwrap();
+    let far = find(&snap, "link", "far link").cloned().unwrap();
+    // Clicking the off-screen link must navigate to #target.
+    session.click(&far).await.unwrap();
+    let hash = session.eval_text("location.hash").await.unwrap();
+    assert_eq!(hash, "#target", "below-fold click should have navigated to #target, got: {hash}");
+}
+
 /// Live-network check. Run explicitly:
 /// `cargo test -p vakbrowse-engine --test actions -- --ignored`
 #[tokio::test]
