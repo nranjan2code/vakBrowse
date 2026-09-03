@@ -1,0 +1,25 @@
+# vakBrowse Python distribution.
+#
+# This package ships the compiled Rust cdylib (`libvakbrowse_ffi.*`) produced by
+# `crates/vakbrowse-ffi` alongside a thin ctypes `Session` wrapper. Install with
+# `pip install .` from this directory (a Rust toolchain + the chrome-headless-
+# shell CFT cache — fetched on first `open()` by `vakd doctor` / `cft` — are
+# resolved automatically at import time, not at build time).
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vakbrowse"
+version = "0.4.0"
+description = "Embed vakBrowse — an agent-native browser — from Python via ctypes."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+
+[tool.setuptools]
+packages = ["vakbrowse"]
+
+[tool.setuptools.package-data]
+vakbrowse = ["libvakbrowse_ffi.*"]

@@ -36,4 +36,8 @@ url = "2"
 
 [profile.release]
 lto = "thin"
+# NOTE: `strip = true` is fine for the daemon/CLI executables but corrupts the
+# `vakbrowse-ffi` cdylib's __LINKEDIT alignment on macOS (dyld rejects it with
+# "mis-aligned LINKEDIT string pool"). The Python wheel (python/setup.py)
+# builds the cdylib with `--config profile.release.strip=false`.
 strip = true

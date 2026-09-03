@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+setup.py
+tests/test_session.py
+vakbrowse/__init__.py
+vakbrowse.egg-info/PKG-INFO
+vakbrowse.egg-info/SOURCES.txt
+vakbrowse.egg-info/dependency_links.txt
+vakbrowse.egg-info/top_level.txt
