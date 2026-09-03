@@ -50,7 +50,7 @@ capability once, all five surfaces get it.
   below-fold clicks; per-session `--stealth` and `--proxy`; `extract` action
   returning clean readable article text; tagged releases shipping binaries.
 
-50 tests, clippy clean. Hardened against real environments: launch args verified
+51 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
 mouse-event click AND a ground-truth DOM `element.click()` both leave the
@@ -62,7 +62,10 @@ structured `ServiceError` over the wire (never raw strings), the engine
 seam is `Arc<dyn EngineLauncher>` so the session manager is backend-agnostic,
 MCP `browser_screenshot` returns real PNG pixels (not a placeholder), and the
 FFI embeds a long-lived runtime with a nested-context guard so it works from
-inside a caller tokio loop. See `AGENTS.md` for the full map and conventions.
+inside a caller tokio loop. The stdio transport test drives the real `vak-mcp`
+binary end-to-end with the same NDJSON framing the official `mcp` SDK uses
+(rmcp 3.1.4's stdio is newline-delimited JSON on both sides, not
+Content-Length). See `AGENTS.md` for the full map and conventions.
 
 ## Install (from a release tag)
 

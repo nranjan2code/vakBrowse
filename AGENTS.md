@@ -106,7 +106,9 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   This keeps `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
 - Verified green on `linux/amd64` as root (sandbox auto-disabled) and as uid 1000
   (sandbox kept on, auto-falls back to `--no-sandbox` on the non-root sandbox
-  rejection): 50 passed / 2 ignored in both, clippy clean.
+  rejection): 51 passed / 2 ignored in both, clippy clean. The +1 over the
+  prior 50 is the new `crates/vakbrowse-mcp/tests/stdio_transport.rs` real-stdio
+  handshake test (NDJSON framing, see Key facts).
 
 ## Architecture map
 
@@ -210,6 +212,21 @@ bins/
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),
   zip v8 extraction. CDP gotcha: in `Runtime.callFunctionOn` the resolved DOM
   node arrives as `this`, not as an argument.
+- **MCP stdio is NDJSON, not Content-Length.** rmcp 3.1.4's `transport::stdio()`
+  (used by `vak-mcp`'s `serve(rmcp::transport::stdio())`) wraps stdin/stdout in
+  `AsyncRwTransport` whose `JsonRpcMessageCodec` **encode** writes
+  `{"jsonrpc":...}\n` and **decode** reads newline-terminated lines — there is no
+  `Content-Length` handling anywhere in the transport layer. A Content-Length-
+  framed client sends the `Content-Length: N` header as its own line, which the
+  codec silently skips, and the (newline-less) body is only read at EOF — so a
+  streaming client that keeps stdin open hangs. The official `mcp` Python SDK
+  matches rmcp: it writes `json + "\n"` and reads by splitting on `\n`. The
+  in-repo `stdio_transport` test mirrors that exact NDJSON handshake
+  (`protocolVersion "2025-11-25"`, empty `_meta: {}`; SEP-2575 `_meta` keys are
+  only required for protocolVersion >= 2026-07-28). Caveat: the MCP *spec* text
+  describes stdio with Content-Length framing, so TS-SDK clients (Claude/Cursor)
+  would need to send NDJSON to interoperate; this is an rmcp transport choice,
+  not a vakBrowse-engine concern.
 - Error model: `handle()` always returns `Result<ResponsePayload, String>`
   where app-level failures are `Ok(ResponsePayload::Error(ServiceError))`;
   `Err(String)` is reserved for handler-panic transport errors. `ServiceError`
