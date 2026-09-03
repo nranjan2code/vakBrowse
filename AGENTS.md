@@ -179,6 +179,12 @@ bins/
   goes through our code.
 - `fill` focuses the element before setting its value; the human pattern
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
+  Note for agent loops: on client-side SPAs (e.g. Wikipedia) `document.readyState`
+  stays `'complete'` across route changes, so `wait` on a `readyState` predicate
+  returns instantly and races the (slow) in-page navigation; wait on a URL/title
+  predicate instead (`!location.href.includes('Main_Page')`). The `vak` CLI
+  spells the key command `key`, with a `press_key` visible alias matching the
+  `Action::PressKey` / `browser_press_key` naming.
 - History actions (`back`/`forward`/`reload`) wait for navigation and
   tolerate two races: the old execution context dying mid-reload, and
   `wait_for_navigation` rejecting with "Inspected target navigated or
