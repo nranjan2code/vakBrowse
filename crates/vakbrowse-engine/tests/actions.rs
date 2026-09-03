@@ -139,6 +139,17 @@ async fn eval_text_coerces_non_string_primitives() {
     assert_eq!(z, "null", "null must stringify, got: {z}");
     let s = session.eval_text("document.querySelector('form') ? 'has-form' : 'no-form'").await.unwrap();
     assert_eq!(s, "has-form");
+    // Unserializable primitives and `undefined` must not collapse to "null".
+    let u = session.eval_text("undefined").await.unwrap();
+    assert_eq!(u, "undefined", "undefined must stringify to \"undefined\", got: {u}");
+    let nan = session.eval_text("NaN").await.unwrap();
+    assert_eq!(nan, "NaN", "NaN must stringify to \"NaN\", got: {nan}");
+    let inf = session.eval_text("Infinity").await.unwrap();
+    assert_eq!(inf, "Infinity", "Infinity must stringify, got: {inf}");
+    let ninf = session.eval_text("-Infinity").await.unwrap();
+    assert_eq!(ninf, "-Infinity", "got: {ninf}");
+    let bigint = session.eval_text("BigInt('12345678901234567890')").await.unwrap();
+    assert!(bigint.contains("12345678901234567890"), "BigInt lost precision: {bigint}");
 }
 
 #[tokio::test]

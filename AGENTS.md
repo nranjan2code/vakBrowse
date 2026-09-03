@@ -212,21 +212,26 @@ bins/
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),
   zip v8 extraction. CDP gotcha: in `Runtime.callFunctionOn` the resolved DOM
   node arrives as `this`, not as an argument.
-- **MCP stdio is NDJSON, not Content-Length.** rmcp 3.1.4's `transport::stdio()`
-  (used by `vak-mcp`'s `serve(rmcp::transport::stdio())`) wraps stdin/stdout in
-  `AsyncRwTransport` whose `JsonRpcMessageCodec` **encode** writes
-  `{"jsonrpc":...}\n` and **decode** reads newline-terminated lines — there is no
-  `Content-Length` handling anywhere in the transport layer. A Content-Length-
-  framed client sends the `Content-Length: N` header as its own line, which the
-  codec silently skips, and the (newline-less) body is only read at EOF — so a
-  streaming client that keeps stdin open hangs. The official `mcp` Python SDK
-  matches rmcp: it writes `json + "\n"` and reads by splitting on `\n`. The
-  in-repo `stdio_transport` test mirrors that exact NDJSON handshake
+- **MCP stdio is NDJSON, matching both official SDKs.** rmcp 3.1.4's
+  `transport::stdio()` (used by `vak-mcp`'s `serve(rmcp::transport::stdio())`)
+  wraps stdin/stdout in `AsyncRwTransport` whose `JsonRpcMessageCodec`
+  **encode** writes `{"jsonrpc":...}\n` and **decode** reads newline-terminated
+  lines (skipping any non-JSON line). There is no `Content-Length` handling in
+  the transport layer. This is **not a gap**: the official `mcp` Python SDK
+  (`client/stdio.py` writes `json + "\n"`, reads by splitting on `\n`) and the
+  official `@modelcontextprotocol/sdk` TypeScript SDK (v1.26 `shared/stdio.js`:
+  `serializeMessage = JSON.stringify(msg) + '\n'`; `ReadBuffer` splits on `'\n'`;
+  zero `Content-Length` references in the entire package) both use NDJSON too —
+  so vak-mcp interoperates with Claude/Cursor/opencode out of the box. A
+  spec-literal Content-Length-only custom client would not speak to it (rmcp
+  itself shares this limitation, so it is an ecosystem-wide convention, not a
+  vakBrowse bug). Note the framing trap it DID cause: a Content-Length-framed
+  client sends the `Content-Length: N` header as its own line (silently
+  skipped) and the body with no trailing newline, so the server only reads it at
+  EOF — a streaming client that keeps stdin open hangs. The in-repo
+  `stdio_transport` test uses NDJSON to mirror the real SDKs
   (`protocolVersion "2025-11-25"`, empty `_meta: {}`; SEP-2575 `_meta` keys are
-  only required for protocolVersion >= 2026-07-28). Caveat: the MCP *spec* text
-  describes stdio with Content-Length framing, so TS-SDK clients (Claude/Cursor)
-  would need to send NDJSON to interoperate; this is an rmcp transport choice,
-  not a vakBrowse-engine concern.
+  only required for protocolVersion >= 2026-07-28).
 - Error model: `handle()` always returns `Result<ResponsePayload, String>`
   where app-level failures are `Ok(ResponsePayload::Error(ServiceError))`;
   `Err(String)` is reserved for handler-panic transport errors. `ServiceError`

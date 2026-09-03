@@ -31,7 +31,7 @@ use chromiumoxide::cdp::browser_protocol::page::{
     AddScriptToEvaluateOnNewDocumentParams, CaptureScreenshotFormat, CaptureScreenshotParams,
     FrameId, GetFrameTreeParams,
 };
-use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
+use chromiumoxide::cdp::js_protocol::runtime::{EvaluateParams, RemoteObjectType};
 use chromiumoxide::handler::viewport::Viewport;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -807,12 +807,37 @@ impl PageOps for CdpSession {
             )
             .await
             .map_err(proto_err)?;
-        let value: serde_json::Value = resp
-            .result
-            .result
-            .value
-            .unwrap_or(serde_json::Value::Null);
-        Ok(stringify_js(value))
+        let remote = resp.result.result;
+        // Inline JSON value covers primitives and JSON-serializable
+        // objects/arrays (requested via `return_by_value`). Unserializable
+        // primitives (BigInt, -0, NaN, Infinity) arrive under
+        // `unserializableValue` instead — JSON cannot represent them, so we
+        // surface the CDP string form rather than collapsing them to "null".
+        if let Some(value) = remote.value {
+            return Ok(stringify_js(value));
+        }
+        if let Some(unserializable) = remote.unserializable_value {
+            return Ok(unserializable.as_ref().to_string());
+        }
+        // No inline value at all: undefined / function / symbol, or an object
+        // handed back only by identity (objectId). Mirror a JS REPL rather than
+        // mis-reporting `undefined` as "null".
+        Ok(match remote.r#type {
+            RemoteObjectType::Undefined => "undefined".to_string(),
+            RemoteObjectType::Symbol => remote
+                .description
+                .clone()
+                .unwrap_or_else(|| "[symbol]".to_string()),
+            RemoteObjectType::Function => remote
+                .description
+                .clone()
+                .unwrap_or_else(|| "[function]".to_string()),
+            // CDP models JS `null` as type "object" with no inline value and no
+            // objectId. A real object is inlined when return_by_value is set; the
+            // only object left with value=None is therefore `null`.
+            RemoteObjectType::Object if remote.object_id.is_none() => "null".to_string(),
+            _ => "[object Object]".to_string(),
+        })
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot> {
