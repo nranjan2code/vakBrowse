@@ -28,6 +28,7 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
             axum::routing::delete(close_session),
         )
         .route("/sessions/{session}/actions", post(dispatch_action))
+        .route("/sessions/{session}/batch", post(dispatch_batch))
         .route("/ws", any(ws_bridge))
         .with_state(state)
 }
@@ -109,6 +110,24 @@ async fn dispatch_action(
         .handle(Request::Act {
             session: SessionId(session),
             action,
+        })
+        .await;
+    response_to_http(response)
+}
+
+/// Run a sequence of actions in one request (fail-fast on the first error).
+/// Bodies as `POST /sessions/{session}/batch` with a JSON array of action
+/// objects, e.g. `[{"type":"navigate","url":"…"},{"type":"extract"}]`.
+async fn dispatch_batch(
+    State(state): State<ApiState>,
+    axum::extract::Path(session): axum::extract::Path<String>,
+    Json(actions): Json<Vec<vakbrowse_server::Action>>,
+) -> impl IntoResponse {
+    let response = state
+        .manager
+        .handle(Request::Batch {
+            session: SessionId(session),
+            actions,
         })
         .await;
     response_to_http(response)

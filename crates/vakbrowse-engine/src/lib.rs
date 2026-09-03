@@ -29,6 +29,10 @@ pub struct LaunchOptions {
     pub stealth: Option<vakbrowse_stealth::StealthProfile>,
     /// Chromium proxy, e.g. `http://user:pass@host:port` or `socks5://host:port`.
     pub proxy_server: Option<String>,
+    /// When set, inject small randomized delays before input actions so the
+    /// agent's timing isn't robotic (defeats cadence-based behavioral tells;
+    /// stealth stays honest — it does NOT fake TLS/HTTP2 fingerprints).
+    pub human_timing: bool,
 }
 
 impl Default for LaunchOptions {
@@ -41,6 +45,7 @@ impl Default for LaunchOptions {
             extra_args: Vec::new(),
             stealth: None,
             proxy_server: None,
+            human_timing: false,
         }
     }
 }

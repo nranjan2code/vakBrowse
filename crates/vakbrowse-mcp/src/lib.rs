@@ -54,6 +54,8 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                     ("headed", json!({"type": "boolean", "description": "show window (default false)"})),
                     ("stealth", json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"})),
                     ("proxy", json!({"type": "string", "description": "proxy for this session, e.g. http://user:pass@host:port or socks5://host:port"})),
+                    ("proxies", json!({"type":"array","items":{"type":"string"},"description":"proxy rotation pool (2+ endpoints); rotate-proxy cycles them to escape IP-reputation walls"})),
+                    ("human_timing", json!({"type":"boolean","description":"inject randomized delays before input actions to mask robotic cadence"})),
                 ],
                 &[],
             ),
@@ -62,6 +64,13 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "browser_close",
             "Close a browser session and its browser process.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_rotate_proxy",
+            "Re-launch the browser on the next proxy in the session's pool (open \
+             with proxies=[a,b,…]). Honest IP-reputation rotation — NOT TLS \
+             spoofing. Requires a pool of 2+ endpoints.",
             schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
         ),
         Tool::new(
@@ -276,6 +285,29 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                 &["session", "pattern"],
             ),
         ),
+        Tool::new(
+            "browser_batch",
+            "Run a sequence of actions in one round-trip (fail-fast on the first \
+             error). Pass `actions` as a JSON array of action objects, each with \
+             a `type` key (e.g. {\"type\":\"navigate\",\"url\":...}, \
+             {\"type\":\"extract\"}, {\"type\":\"wait_url\",\"pattern\":...}). \
+             Cuts agent latency: open+extract+close, fill+press+wait, etc., \
+             as a single request.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    (
+                        "actions",
+                        json!({
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "ordered list of Action objects (see Action enum)"
+                        }),
+                    ),
+                ],
+                &["session", "actions"],
+            ),
+        ),
     ]
 }
 
@@ -355,10 +387,25 @@ impl VakMcp {
                         .filter(|b| *b)
                         .map(|_| "mcp".to_string()),
                     proxy: arg(args, "proxy").and_then(|v| v.as_str()).map(String::from),
+                    proxies: arg(args, "proxies")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    human_timing: arg(args, "human_timing")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 },
             },
             "browser_close" => Request::Close {
                 session: SessionId(arg_str(args, "session")?),
+            },
+            "browser_rotate_proxy" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::RotateProxy,
             },
             "browser_sessions" => Request::ListSessions,
             "browser_navigate" => Request::Act {
@@ -495,6 +542,23 @@ impl VakMcp {
                         .unwrap_or(5_000),
                 },
             },
+            "browser_batch" => {
+                let actions_val = arg(args, "actions").ok_or_else(|| {
+                    McpError::invalid_params("browser_batch requires 'actions'", None)
+                })?;
+                let actions: Vec<Action> = serde_json::from_value(actions_val.clone())
+                    .map_err(|e| McpError::invalid_params(format!("actions: {e}"), None))?;
+                if actions.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "browser_batch 'actions' must be non-empty".to_string(),
+                        None,
+                    ));
+                }
+                Request::Batch {
+                    session: SessionId(arg_str(args, "session")?),
+                    actions,
+                }
+            },
             other => {
                 return Err(McpError::invalid_params(format!("unknown tool {other:?}"), None));
             }
@@ -525,42 +589,53 @@ fn render_payload(p: &ResponsePayload) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        ResponsePayload::Result(action) => match action {
-            vakbrowse_server::ActionResult::Navigated { url, title } => {
-                format!("navigated\n{title}\n{url}")
-            }
-            vakbrowse_server::ActionResult::Snapshot { snapshot } => {
-                vakbrowse_server::render::snapshot_text(snapshot)
-            }
-            vakbrowse_server::ActionResult::Text { text } => text.clone(),
-            vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
-            vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
-            vakbrowse_server::ActionResult::Cookies { cookies } => {
-                serde_json::to_string_pretty(cookies).unwrap_or_else(|_| "[]".into())
-            }
-            vakbrowse_server::ActionResult::Done => "done".into(),
-            vakbrowse_server::ActionResult::Image { .. } => "(screenshot)".into(),
-            vakbrowse_server::ActionResult::Tabs { tabs } => tabs
-                .iter()
-                .map(|t| format!("{} {}", t.id, t.url))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            vakbrowse_server::ActionResult::TabOpened { tab } => {
-                format!("tab {} open ({})", tab.id, tab.url)
-            }
-            vakbrowse_server::ActionResult::Tools { tools } => {
-                if tools.is_empty() {
-                    "(no WebMCP tools on this page)".into()
-                } else {
-                    tools
-                        .iter()
-                        .map(|t| format!("{}\t{}", t.name, t.description))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
-            }
-        },
+        ResponsePayload::Result(action) => fmt_action(action),
+        ResponsePayload::Results(results) => results
+            .iter()
+            .enumerate()
+            .map(|(i, a)| format!("[{i}] {}", fmt_action(a)))
+            .collect::<Vec<_>>()
+            .join("\n"),
         ResponsePayload::Error(e) => format!("error: {e}"),
+    }
+}
+
+/// Render one `ActionResult` for MCP text (shared by single-result and batch).
+fn fmt_action(a: &vakbrowse_server::ActionResult) -> String {
+    match a {
+        vakbrowse_server::ActionResult::Navigated { url, title } => {
+            format!("navigated\n{title}\n{url}")
+        }
+        vakbrowse_server::ActionResult::Snapshot { snapshot } => {
+            vakbrowse_server::render::snapshot_text(snapshot)
+        }
+        vakbrowse_server::ActionResult::Text { text } => text.clone(),
+        vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
+        vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
+        vakbrowse_server::ActionResult::Cookies { cookies } => {
+            serde_json::to_string_pretty(cookies).unwrap_or_else(|_| "[]".into())
+        }
+        vakbrowse_server::ActionResult::Done => "done".into(),
+        vakbrowse_server::ActionResult::Image { .. } => "(screenshot)".into(),
+        vakbrowse_server::ActionResult::Tabs { tabs } => tabs
+            .iter()
+            .map(|t| format!("{} {}", t.id, t.url))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        vakbrowse_server::ActionResult::TabOpened { tab } => {
+            format!("tab {} open ({})", tab.id, tab.url)
+        }
+        vakbrowse_server::ActionResult::Tools { tools } => {
+            if tools.is_empty() {
+                "(no WebMCP tools on this page)".into()
+            } else {
+                tools
+                    .iter()
+                    .map(|t| format!("{}\t{}", t.name, t.description))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
     }
 }
 

@@ -17,7 +17,7 @@ vakBrowse/
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
-│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 24 browser_* tools
+│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 27 browser_* tools
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
 │   └── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
 ├── bins/vakd                 # daemon (session pool, profiles, policy)
@@ -35,7 +35,7 @@ capability once, all five surfaces get it.
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
   scroll/wait; cookies + persistent profiles.
 - **Surfaces (P2–P3)** — `vakd` daemon over UDS; `vak` CLI; `vak-mcp`
-  (**24 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
+  (**27 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
   `libvakbrowse_ffi` cdylib (Python ctypes drives full flows in-process);
   Docker image with the pinned engine baked in.
 - **Agent-grade capabilities (P4)** — stealth fingerprints + humanized
@@ -50,8 +50,18 @@ capability once, all five surfaces get it.
   below-fold clicks, and a SPA-safe `wait_url` (waits on `location.href`, not
   `readyState`); per-session `--stealth` and `--proxy`; `extract` action
   returning clean readable article text; tagged releases shipping binaries.
+- **Throughput & bot-wall resilience (P6+, this cycle)** — `Request::Batch`
+  runs a sequence of actions in one round-trip with fail-fast, cutting agent
+  latency across all five surfaces (`vak batch`, `browser_batch`,
+  `POST /batch`, UDS + WS, FFI); per-session proxy rotation via `RotateProxy`
+  (`--proxies a,b` / `browser_rotate_proxy` / `vak rotate-proxy`) re-launches
+  Chrome on the next endpoint and **restores the session URL** so an agent
+  can carry on after a bot-wall challenge; `--human-timing` injects
+  sub-150ms randomized input delays (cadence tell, no TLS spoofing);
+  `scripts/release.sh` bakes the pinned engine + gates mac/linux-root/
+  linux-uid1000 green.
 
-56 tests, clippy clean. Hardened against real environments: launch args verified
+64 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
 mouse-event click AND a ground-truth DOM `element.click()` both leave the

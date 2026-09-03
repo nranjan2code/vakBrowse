@@ -37,6 +37,14 @@ enum Command {
         /// Proxy for this session (http://user:pass@host:port | socks5://host:port).
         #[arg(long)]
         proxy: Option<String>,
+        /// Proxy rotation pool (comma-separated: a,b,c). `rotate-proxy` cycles
+        /// these endpoints to escape IP-reputation walls honestly.
+        #[arg(long, value_delimiter = ',')]
+        proxies: Vec<String>,
+        /// Inject small randomized delays before input actions so the agent's
+        /// timing isn't robotic (cadence-based behavioral tell).
+        #[arg(long)]
+        human_timing: bool,
     },
     /// Close a session.
     Close { session: String },
@@ -120,6 +128,14 @@ enum Command {
     Switch { session: String, tab: String },
     /// Close a tab.
     CloseTab { session: String, tab: String },
+    /// Re-launch the browser on the next proxy in the session's pool
+    /// (open with --proxies a,b). Honest anti-bot rotation.
+    #[command(visible_alias = "rotate_proxy")]
+    RotateProxy { session: String },
+    /// Run a batch of actions in one request (fail-fast on first error).
+    /// `actions` is a JSON array of action objects, e.g.:
+    /// '[{"type":"navigate","url":"https://example.com"},{"type":"extract"}]'
+    Batch { session: String, actions: String },
 }
 
 #[tokio::main]
@@ -149,7 +165,7 @@ async fn main() {
 
 fn to_request(cmd: Command) -> Result<Request, String> {
     Ok(match cmd {
-        Command::Open { url, profile, headed, stealth, proxy } => Request::Open {
+        Command::Open { url, profile, headed, stealth, proxy, proxies, human_timing } => Request::Open {
             options: SessionOptions {
                 profile: profile.clone().map(vakbrowse_core::ProfileId::new),
                 headless: !headed,
@@ -158,6 +174,8 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                     profile.unwrap_or_else(|| "default".to_string())
                 }),
                 proxy,
+                proxies,
+                human_timing,
             },
         },
         Command::Close { session } => Request::Close {
@@ -203,6 +221,18 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         Command::NewTab { session, url } => act(session, Action::NewTab { url }),
         Command::Switch { session, tab } => act(session, Action::SwitchTab { tab: vakbrowse_core::TabId(tab) }),
         Command::CloseTab { session, tab } => act(session, Action::CloseTab { tab: vakbrowse_core::TabId(tab) }),
+        Command::RotateProxy { session } => act(session, Action::RotateProxy),
+        Command::Batch { session, actions } => {
+            let acts: Vec<Action> = serde_json::from_str(&actions)
+                .map_err(|e| format!("batch actions JSON parse error: {e}"))?;
+            if acts.is_empty() {
+                return Err("batch actions must be non-empty".into());
+            }
+            Request::Batch {
+                session: SessionId(session),
+                actions: acts,
+            }
+        }
     })
 }
 
@@ -256,43 +286,54 @@ fn render_payload(p: ResponsePayload) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        ResponsePayload::Result(action) => match action {
-            vakbrowse_server::ActionResult::Navigated { url, title } => format!("{title}\n{url}"),
-            vakbrowse_server::ActionResult::Snapshot { snapshot } => {
-                vakbrowse_server::render::snapshot_text(&snapshot)
-            }
-            vakbrowse_server::ActionResult::Text { text } => text,
-            vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
-            vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
-            vakbrowse_server::ActionResult::Cookies { cookies } => serde_json::to_string_pretty(
-                &cookies,
-            )
-            .unwrap_or_else(|_| "[]".into()),
-            vakbrowse_server::ActionResult::Tabs { tabs } => tabs
-                .iter()
-                .map(|t| format!("{}\t{}", t.id, t.url))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            vakbrowse_server::ActionResult::TabOpened { tab } => {
-                format!("tab {} open ({})", tab.id, tab.url)
-            }
-            vakbrowse_server::ActionResult::Done => "done".into(),
-            vakbrowse_server::ActionResult::Image { png_base64 } => {
-                save_screenshot(&png_base64)
-            }
-            vakbrowse_server::ActionResult::Tools { tools } => {
-                if tools.is_empty() {
-                    "(no WebMCP tools on this page)".into()
-                } else {
-                    tools
-                        .iter()
-                        .map(|t| format!("{}\t{}", t.name, t.description))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
-            }
-        },
+        ResponsePayload::Result(action) => format_action_result(action),
+        ResponsePayload::Results(results) => results
+            .iter()
+            .enumerate()
+            .map(|(i, a)| format!("[{i}] {}", format_action_result(a.clone())))
+            .collect::<Vec<_>>()
+            .join("\n"),
         ResponsePayload::Error(e) => format!("error: {e}"),
+    }
+}
+
+/// Render one `ActionResult` to CLI text (shared by single-result and batch).
+fn format_action_result(action: vakbrowse_server::ActionResult) -> String {
+    match action {
+        vakbrowse_server::ActionResult::Navigated { url, title } => format!("{title}\n{url}"),
+        vakbrowse_server::ActionResult::Snapshot { snapshot } => {
+            vakbrowse_server::render::snapshot_text(&snapshot)
+        }
+        vakbrowse_server::ActionResult::Text { text } => text,
+        vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
+        vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
+        vakbrowse_server::ActionResult::Cookies { cookies } => serde_json::to_string_pretty(
+            &cookies,
+        )
+        .unwrap_or_else(|_| "[]".into()),
+        vakbrowse_server::ActionResult::Tabs { tabs } => tabs
+            .iter()
+            .map(|t| format!("{}\t{}", t.id, t.url))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        vakbrowse_server::ActionResult::TabOpened { tab } => {
+            format!("tab {} open ({})", tab.id, tab.url)
+        }
+        vakbrowse_server::ActionResult::Done => "done".into(),
+        vakbrowse_server::ActionResult::Image { png_base64 } => {
+            save_screenshot(&png_base64)
+        }
+        vakbrowse_server::ActionResult::Tools { tools } => {
+            if tools.is_empty() {
+                "(no WebMCP tools on this page)".into()
+            } else {
+                tools
+                    .iter()
+                    .map(|t| format!("{}\t{}", t.name, t.description))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
     }
 }
 

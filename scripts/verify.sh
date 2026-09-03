@@ -31,15 +31,18 @@ elif [[ "${1:-}" == "--mac" ]]; then
 fi
 
 LIB_APTS=$(IFS=' '; echo "${CARGO_LIBS[*]}")
-VOL_CARGOS="-v $(pwd):/src"
+# Always mount the source tree at /src (root path originally dropped it when
+# the vk-cargo volume existed — Docker then saw no Cargo.toml).
+VOL_SRC="-v $(pwd):/src"
+VOL_CARGO=""
 if docker volume ls --format '{{.Name}}' | grep -q '^vk-cargo$'; then
-  VOL_CARGOS="--mount type=volume,src=vk-cargo,target=/usr/local/cargo"
+  VOL_CARGO="--mount type=volume,src=vk-cargo,target=/usr/local/cargo"
 fi
 VOL_TARGET="--mount type=volume,src=vk-target,target=/src/target"
 
 if [[ "$mode" == "root" ]]; then
   docker run --rm --platform linux/amd64 \
-    $VOL_CARGOS $VOL_TARGET -v /tmp/vaklogs:/logs:rw -w /src \
+    $VOL_SRC $VOL_CARGO $VOL_TARGET -v /tmp/vaklogs:/logs:rw -w /src \
     rust:1-bookworm \
     bash -c "set -e
       apt-get update -qq && apt-get install -y -qq $LIB_APTS >/dev/null 2>&1
@@ -50,7 +53,7 @@ else
   # Non-root (mirrors the constrained-container CI that blocks the sandbox even
   # for unprivileged users): build as root, then hand off to a uid-N user.
   docker run --rm --platform linux/amd64 \
-    $VOL_CARGOS $VOL_TARGET -v "$(pwd)":/src -v /tmp/vaklogs:/logs:rw -w /src \
+    $VOL_SRC $VOL_CARGO $VOL_TARGET -v "$(pwd)":/src -v /tmp/vaklogs:/logs:rw -w /src \
     rust:1-bookworm \
     bash -c "set -e
       apt-get update -qq && apt-get install -y -qq $LIB_APTS >/dev/null 2>&1

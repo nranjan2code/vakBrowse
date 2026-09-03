@@ -134,6 +134,72 @@ async fn full_agent_flow_through_mcp_tools() {
     assert!(text_of(out).contains("closed"));
 }
 
+/// One round-trip for many actions: `browser_batch` dispatches a sequence
+/// server-side and returns one `[i]`-prefixed result per action (fail-fast
+/// on the first error). Proves the batching path end-to-end through MCP.
+#[tokio::test]
+async fn batch_runs_actions_in_one_roundtrip() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let server = VakMcp::default();
+
+    let out = server
+        .tool_call(
+            "browser_open",
+            args(&[("url", json!(fixture_url("form.html")))]).as_ref(),
+        )
+        .await
+        .expect("open ok");
+    let session = text_of(out)
+        .split(' ')
+        .nth(1)
+        .expect("session id")
+        .to_string();
+
+    // Two actions, one call: snapshot then SPA-safe wait_url.
+    let actions = json!([
+        { "type": "snapshot" },
+        { "type": "wait_for_url", "pattern": "form.html", "timeout_ms": 2000 },
+    ]);
+    let out = server
+        .tool_call(
+            "browser_batch",
+            args(&[("session", json!(&session)), ("actions", actions)]).as_ref(),
+        )
+        .await
+        .expect("batch ok");
+    let text = text_of(out);
+    // Each result is prefixed with its 0-based index.
+    assert!(text.contains("[0]"), "first result indexed: {text}");
+    assert!(text.contains("@e1"), "snapshot rendered in batch [0]: {text}");
+    assert!(text.contains("[1] done"), "wait_url result indexed: {text}");
+
+    // Fail-fast: a bad click ref surfaces as an error, not a partial list.
+    let bad = json!([
+        { "type": "click", "ref": "@stale-Nope" },
+        { "type": "snapshot" },
+    ]);
+    let out = server
+        .tool_call(
+            "browser_batch",
+            args(&[("session", json!(&session)), ("actions", bad)]).as_ref(),
+        )
+        .await
+        .expect("batch error is an Ok(Error) payload");
+    let err_text = text_of(out);
+    // Fail-fast: the batch surfaced the FIRST action's error (Click on a
+    // stale ref) and never ran the second (Snapshot). MCP surfaces app errors
+    // as an error result; the body is the ServiceError Display.
+    assert!(
+        err_text.contains("not found") || err_text.contains("stale"),
+        "fail-fast should surface the error: {err_text}"
+    );
+
+    server
+        .tool_call("browser_close", args(&[("session", json!(&session))]).as_ref())
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn unknown_tool_is_invalid_params() {
     let server = VakMcp::default();

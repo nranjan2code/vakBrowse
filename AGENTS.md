@@ -111,6 +111,15 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   Python SDK), one identical handshake over **Content-Length** framing,
   three hermetic unit tests for the `StdioFramer` input normalizer, and a
   `wait_for_url` regression (match + timeout).
+- The current cycle adds `Request::Batch` (fail-fast, one result per action)
+  + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
+  on the next endpoint in `SessionOptions.proxies`, **restoring the session
+  URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
+  count is now **64 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  Linux-uid1000, clippy clean. New chrome-launching server tests are guarded by
+  `browser_lock()` (serialized per test binary) to keep the Linux non-root gate
+  green. `./scripts/release.sh` bakes the pinned engine (`vakd doctor --no-probe`),
+  runs all three gates, tags, and appends to `CHANGELOG.md`.
 - Reproducible gates (GH Actions is intentionally disabled — see Golden Rule #6):
   `./scripts/verify.sh --mac` (host), `./scripts/verify.sh --root` and
   `./scripts/verify.sh --uid 1000` (linux/amd64 Docker, root + non-root).
@@ -137,7 +146,7 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   25 browser_* tools (tabs, history, screenshot/click-at,
+                        #   27 browser_* tools (tabs, history, screenshot/click-at,
                         #   extract, webmcp, wait_url, stealth/proxy on open);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model
@@ -201,7 +210,13 @@ bins/
   Wikipedia page). Agents should prefer extract over eval for reading.
 - Per-session proxy ships as `SessionOptions.proxy` (`--proxy` on CLI,
   `browser_open {proxy}` in MCP) — the answer to IP-reputation walls.
-  Proxy *rotation* across a pool of endpoints remains a future idea.
+  Proxy *rotation* across a pool is `Action::RotateProxy`
+  (`--proxies a,b` / `browser_rotate_proxy` / `vak rotate-proxy`): it
+  re-launches Chrome on the next endpoint and **re-navigates to the session's
+  last URL** so the agent carries on from where it left off. Honest limits:
+  rotation only changes the source IP — it does NOT defeat TLS/HTTP2
+  fingerprinting or behavioral biometrics (DDG/Bing/Cloudflare hard-wall even
+  under `--stealth` + rotation).
 - Dogfood findings (real web): Wikipedia/GitHub/example.com/HN flows work
   end-to-end: a Wikipedia search -> click result lands on the article; an
   example.com -> click "Learn more" lands on www.iana.org — both proven by
@@ -280,6 +295,7 @@ bins/
 | P4 | Stealth module, session pooling, vision fallback, WebMCP surfacing | **done** |
 | P5 | Multi-tab sessions, cross-frame (iframe) perception & clicks; CI built then disabled (billing) | **done** |
 | P6 | Real-web dogfooding fixes (snapshot self-heal, fill-focuses, history) + per-session stealth/proxy + `extract` action + release workflow | **done** |
+| P7 | Action batching (`Request::Batch`+`Results` over all surfaces), proxy rotation (`RotateProxy` w/ URL restore), `--human-timing` jitter, `scripts/release.sh` | **done** |
 
 Post-roadmap ideas (not committed): pip/npm packaging of the FFI,
 WebDriver BiDi backend behind the engine trait, Servo/Lightpanda

@@ -296,6 +296,7 @@ impl EngineLauncher for CdpLauncher {
             next_tab: 2,
             stealth: options.stealth.clone(),
             pointer: (0.0, 0.0),
+            human_timing: options.human_timing,
         }))
     }
 }
@@ -340,6 +341,7 @@ pub struct CdpSession {
     next_tab: u64,
     stealth: Option<vakbrowse_stealth::StealthProfile>,
     pointer: (f64, f64),
+    human_timing: bool,
 }
 
 impl CdpSession {
@@ -349,6 +351,15 @@ impl CdpSession {
 
     fn tab_mut(&mut self) -> &mut TabState {
         self.tabs.get_mut(&self.active).expect("active tab exists")
+    }
+
+    /// Break robotic input cadence when `human_timing` is enabled. Off by
+    /// default so non-agent callers see no slowdown. Uses wall-clock jitter
+    /// (no `rand` dependency) — timing, not secrets.
+    async fn maybe_human_jitter(&self) {
+        if self.human_timing {
+            tokio::time::sleep(human_jitter()).await;
+        }
     }
 
     fn backend_for(&self, r: &ElementRef) -> Result<BackendNodeId> {
@@ -761,6 +772,7 @@ function() {
 impl PageOps for CdpSession {
     async fn navigate(&mut self, url: &str) -> Result<Navigated> {
         let validated = validate_url(url)?;
+        self.maybe_human_jitter().await;
         self.tab().page.goto(validated.as_str()).await.map_err(proto_err)?;
 
         let state = self.tab_mut();
@@ -788,6 +800,7 @@ impl PageOps for CdpSession {
     }
 
     async fn eval_text(&self, expression: &str) -> Result<String> {
+        self.maybe_human_jitter().await;
         // Mirror `evaluate_json_on`: ask for the value by-value and await
         // promises, then stringify. The convenience `page.evaluate().into_value()`
         // both (a) crashes on non-string primitives ("invalid type: boolean …")
@@ -864,6 +877,7 @@ impl PageOps for CdpSession {
     }
 
     async fn click(&mut self, r: &ElementRef) -> Result<()> {
+        self.maybe_human_jitter().await;
         let ax_id = self
             .tab()
             .ref_to_ax
@@ -899,6 +913,7 @@ impl PageOps for CdpSession {
     }
 
     async fn fill(&mut self, r: &ElementRef, text: &str) -> Result<()> {
+        self.maybe_human_jitter().await;
         let backend = self.backend_for(r)?;
         self.call_on_element(backend, SET_VALUE_JS, vec![serde_json::json!(text)])
             .await?;
@@ -919,6 +934,7 @@ impl PageOps for CdpSession {
     }
 
     async fn press_key(&mut self, key: &str) -> Result<()> {
+        self.maybe_human_jitter().await;
         let (code, key_name, vk, text): (String, String, i64, Option<&str>) = match key {
             "Enter" => ("Enter".into(), "Enter".into(), 13, Some("\r")),
             "Tab" => ("Tab".into(), "Tab".into(), 9, None),
@@ -974,6 +990,7 @@ impl PageOps for CdpSession {
     }
 
     async fn scroll(&mut self, dx: f64, dy: f64) -> Result<()> {
+        self.maybe_human_jitter().await;
         let (cx, cy) = self.viewport_center().await?;
         self.mouse_move(cx, cy).await?;
         let page = &self.tab().page;
@@ -1130,6 +1147,7 @@ impl PageOps for CdpSession {
     }
 
     async fn click_at(&mut self, x: f64, y: f64) -> Result<()> {
+        self.maybe_human_jitter().await;
         self.mouse_move(x, y).await?;
         let press = DispatchMouseEventParams::builder()
             .r#type(DispatchMouseEventType::MousePressed)
@@ -1300,5 +1318,30 @@ impl PageOps for CdpSession {
         }
         tracing::info!(%tab, "tab closed");
         Ok(true)
+    }
+}
+
+/// Wall-clock jitter in [20, 150) ms used by `human_timing` to break the
+/// robotic cadence agents otherwise expose. No RNG dependency: derive from
+/// the current second-fraction nanosecond. Not cryptographically secret.
+fn human_jitter() -> std::time::Duration {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let ms = 20 + (nanos % 130);
+    std::time::Duration::from_millis(ms as u64)
+}
+
+#[cfg(test)]
+mod jitter_tests {
+    use super::human_jitter;
+    #[test]
+    fn human_jitter_stays_in_band() {
+        for _ in 0..50 {
+            let ms = human_jitter().as_millis();
+            assert!((20..=150).contains(&ms), "jitter {ms}ms out of band");
+        }
     }
 }

@@ -39,6 +39,15 @@ pub struct SessionOptions {
     /// `socks5://host:port`), answering IP-reputation walls like DDG's.
     #[serde(default)]
     pub proxy: Option<String>,
+    /// Ordered proxy pool; `RotateProxy` re-launches the browser on the next
+    /// endpoint in this list (cycling). The honest path around IP-reputation
+    /// walls: rotate, retry, then fall back to a vision click — no TLS spoofing.
+    #[serde(default)]
+    pub proxies: Vec<String>,
+    /// Inject small randomized delays before input actions so the agent's
+    /// timing isn't robotic (cadence-based behavioral tell). Off by default.
+    #[serde(default)]
+    pub human_timing: bool,
 }
 
 fn default_true() -> bool {
@@ -53,6 +62,8 @@ impl Default for SessionOptions {
             url: None,
             stealth_seed: None,
             proxy: None,
+            proxies: Vec::new(),
+            human_timing: false,
         }
     }
 }
@@ -88,6 +99,10 @@ pub enum Action {
     Screenshot { full_page: bool },
     /// Vision fallback: click raw viewport coordinates.
     ClickAt { x: f64, y: f64 },
+    /// Rotate this session to the next proxy in its `SessionOptions.proxies`
+    /// pool (re-launches the browser, preserves profile + stealth). The
+    /// honest path around IP-reputation walls; requires a pool of 2+ endpoints.
+    RotateProxy,
     /// List tools the page declares via WebMCP (`navigator.modelContext`).
     WebMcpTools,
     /// Invoke a page-declared WebMCP tool.
@@ -130,6 +145,10 @@ pub enum Request {
     Close { session: SessionId },
     ListSessions,
     Act { session: SessionId, action: Action },
+    /// Run a sequence of actions in one round-trip (cuts agent latency:
+    /// open+extract+close, fill+press+wait_url, etc., as one request).
+    /// Fails fast on the first error so the agent sees which step broke.
+    Batch { session: SessionId, actions: Vec<Action> },
 }
 
 /// Wire-level classification of an application error, preserving the
@@ -191,6 +210,9 @@ pub enum ResponsePayload {
     Closed(bool),
     Sessions(Vec<SessionInfo>),
     Result(ActionResult),
+    /// `Request::Batch`: one result per action, in order (fail-fast on first
+    /// error — the whole batch surfaces that action's `ServiceError`).
+    Results(Vec<ActionResult>),
     /// Application-level error (the request was well-formed but the action
     /// failed). Transport-level failures (panic in handler, encode errors)
     /// stay on the `Err(String)` arm of `Response`.
@@ -231,6 +253,12 @@ struct ManagedSession {
     page: Arc<Mutex<Box<dyn PageOps>>>,
     current_url: String,
     last_active: std::time::Instant,
+    /// Original launch options (re-used on `RotateProxy`, only the proxy
+    /// endpoint changes — profile/stealth/headless are preserved).
+    opts: LaunchOptions,
+    /// Proxy rotation pool; `proxy_idx` tracks the currently-active endpoint.
+    proxy_pool: Vec<String>,
+    proxy_idx: usize,
 }
 
 /// Fleet controls: how many sessions may exist at once, and how long an
@@ -380,7 +408,8 @@ impl SessionManager {
                 .stealth_seed
                 .as_deref()
                 .map(vakbrowse_stealth::StealthProfile::generate),
-            proxy_server: options.proxy.clone(),
+            proxy_server: options.proxies.first().cloned().or_else(|| options.proxy.clone()),
+            human_timing: options.human_timing,
             ..LaunchOptions::default()
         };
         if let Some(profile) = &options.profile {
@@ -400,12 +429,20 @@ impl SessionManager {
 
         let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
         let id = self.next_session_id().await;
+        let init_proxy_idx = if options.proxies.is_empty() {
+            0
+        } else {
+            options.proxies.len() - 1
+        };
         let mut managed = ManagedSession {
             id: id.clone(),
             profile: options.profile.clone(),
             page: Arc::new(Mutex::new(page)),
             current_url: "about:blank".to_string(),
             last_active: std::time::Instant::now(),
+            opts: launch,
+            proxy_pool: options.proxies.clone(),
+            proxy_idx: init_proxy_idx,
         };
 
         let navigated = match &options.url {
@@ -454,7 +491,75 @@ impl SessionManager {
             .collect()
     }
 
+    /// Rotate a session to the next proxy endpoint: re-launch the browser with
+    /// the next `--proxy-server` from the session's pool (preserving profile +
+    /// stealth + headless), swap the page atomically, and drop the old browser
+    /// so its chrome process is torn down. Requires a 2+ proxy pool at open.
+    pub async fn rotate_proxy(&self, id: &SessionId) -> Result<ActionResult> {
+        let (opts, pool, idx) = {
+            let map = self.sessions.lock().await;
+            let s = map
+                .get(id)
+                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
+            (s.opts.clone(), s.proxy_pool.clone(), s.proxy_idx)
+        };
+        let n = pool.len();
+        if n < 2 {
+            return Err(VakError::Engine(
+                "RotateProxy needs a proxy pool of 2+ endpoints (open with proxies=[a,b,…])"
+                    .into(),
+            ));
+        }
+        let next = (idx + 1) % n;
+        let mut launch = opts.clone();
+        launch.proxy_server = Some(pool[next].clone());
+
+        tracing::info!(session = %id, proxy = %pool[next], "rotating proxy (endpoint {next}/{n})");
+        let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
+
+        // Remember where the session was, then swap the page live under the
+        // lock. The old CdpSession drops here and its chrome is torn down.
+        let restored_url = {
+            let mut map = self.sessions.lock().await;
+            let s = map
+                .get_mut(id)
+                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
+            let mut guard = s.page.lock().await;
+            *guard = page;
+            s.proxy_idx = next;
+            s.last_active = std::time::Instant::now();
+            s.current_url.clone()
+        };
+
+        // Re-establish the session's URL on the freshly launched browser. This
+        // is what makes rotation useful in practice (bot wall → rotate → carry
+        // on with the same page, new source IP). A session that never
+        // navigated stays on about:blank. The URL already passed policy at
+        // open(); we re-check cheaply to keep the invariant honoured.
+        if restored_url != "about:blank" {
+            self.policy.check(&restored_url)?;
+            let mut map = self.sessions.lock().await;
+            let s = map
+                .get_mut(id)
+                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
+            let mut guard = s.page.lock().await;
+            let nav = guard.navigate(&restored_url).await?;
+            s.current_url = nav.url.clone();
+        }
+
+        Ok(ActionResult::Flag { ok: true })
+    }
+
     pub async fn act(&self, id: &SessionId, action: Action) -> Result<ActionResult> {
+        // RotateProxy re-launches the browser (a 100-500ms chrome spawn) and
+        // swaps the page under the lock. Handle it *before* grabbing `page`
+        // so we never hold the page mutex across the launch (which would
+        // deadlock against our own swap) and so the old CdpSession drops and
+        // tears down its chrome cleanly.
+        if matches!(action, Action::RotateProxy) {
+            return self.rotate_proxy(id).await;
+        }
+
         let entry = {
             let map = self.sessions.lock().await;
             map.get(id)
@@ -482,6 +587,8 @@ impl SessionManager {
         }
 
         let result = match action {
+            // Handled before the page lock is acquired (re-launches the browser).
+            Action::RotateProxy => unreachable!("RotateProxy returns before the page lock"),
             Action::Navigate { url } => {
                 let nav = page.navigate(&url).await?;
                 ActionResult::Navigated {
@@ -620,6 +727,23 @@ impl SessionManager {
                 Ok(result) => ResponsePayload::Result(result),
                 Err(e) => ResponsePayload::Error(e.into()),
             },
+            Request::Batch { session, actions } => {
+                let mut out = Vec::with_capacity(actions.len());
+                let mut failed: Option<VakError> = None;
+                for action in actions {
+                    match self.act(&session, action).await {
+                        Ok(r) => out.push(r),
+                        Err(e) => {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
+                match failed {
+                    Some(e) => ResponsePayload::Error(e.into()),
+                    None => ResponsePayload::Results(out),
+                }
+            }
         };
         Ok(payload)
     }
@@ -644,6 +768,39 @@ mod types_tests {
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Request::Act { ref action, .. } if matches!(action, Action::Click { r#ref } if r#ref == "@e3")));
+    }
+
+    #[test]
+    fn batch_roundtrip_through_json() {
+        // Two actions of different shapes in one batch — exercises the
+        // internally-tagged Action enum inside the externally-tagged Request
+        // (serde tag "type" -> "batch"; each action keeps its own tag like
+        // "click" / "snapshot").
+        let req = Request::Batch {
+            session: SessionId::new("s7"),
+            actions: vec![
+                Action::Click { r#ref: "@e3".into() },
+                Action::Snapshot,
+                Action::WaitForUrl { pattern: "ready".into(), timeout_ms: 1000 },
+            ],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        match back {
+            Request::Batch { session, actions } => {
+                assert_eq!(session, SessionId::new("s7"));
+                assert_eq!(actions.len(), 3);
+                assert!(matches!(&actions[0], Action::Click { .. }));
+                assert!(matches!(&actions[1], Action::Snapshot));
+                assert!(matches!(
+                    &actions[2],
+                    Action::WaitForUrl { pattern, .. } if pattern == "ready"
+                ));
+            }
+            other => panic!("expected Batch, got {other:?}"),
+        }
+        // The wire tag is "batch".
+        assert!(json.contains("\"type\":\"batch\""));
     }
 
     #[test]
