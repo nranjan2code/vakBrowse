@@ -61,6 +61,7 @@ enum Command {
         value: String,
     },
     /// Press a key ("Enter", "Tab", "Escape", ...).
+    #[command(visible_alias = "press_key")]
     Key { session: String, key: String },
     /// Scroll the page (CSS pixels).
     Scroll {
