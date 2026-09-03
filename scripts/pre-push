@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fast local gate installed by `scripts/setup-hooks.sh` as .git/hooks/pre-push.
+# Runs cargo test + clippy on the host before every push. The heavier
+# linux/amd64 root + uid-1000 gate is deliberate (not auto-run on push — it
+# spins up Docker): run `./scripts/verify.sh --root` and
+# `./scripts/verify.sh --uid 1000` before cutting a release tag.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+echo "[pre-push] cargo test + clippy on host"
+cargo test --workspace --no-fail-fast
+cargo clippy --workspace --tests
+echo "[pre-push] OK"

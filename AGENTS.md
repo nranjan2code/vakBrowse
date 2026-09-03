@@ -111,6 +111,12 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   Python SDK), one identical handshake over **Content-Length** framing,
   three hermetic unit tests for the `StdioFramer` input normalizer, and a
   `wait_for_url` regression (match + timeout).
+- Reproducible gates (GH Actions is intentionally disabled — see Golden Rule #6):
+  `./scripts/verify.sh --mac` (host), `./scripts/verify.sh --root` and
+  `./scripts/verify.sh --uid 1000` (linux/amd64 Docker, root + non-root).
+  `./scripts/setup-hooks.sh` installs a `pre-push` hook that runs the fast
+  host gate (`cargo test` + clippy) before every push; the linux gate is
+  deliberate (it starts Docker) and is run before cutting a release tag.
 
 ## Architecture map
 
