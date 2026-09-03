@@ -81,6 +81,12 @@ allowlist for the MCP surface). `VAKBROWSE_HTTP_PORT` (default 7788) for
 
 Embedding from Python (no daemon needed — library owns its runtime):
 
+```bash
+pip install vakbrowse          # ships the bundled native lib + a Session class
+# or bare ctypes against a cargo-built lib:
+#   cargo build -p vakbrowse-ffi --release --config profile.release.strip=false
+```
+
 ```python
 import ctypes, json
 lib = ctypes.CDLL("target/release/libvakbrowse_ffi.dylib")   # .so on linux
@@ -92,6 +98,20 @@ def call(o):
     s = ctypes.string_at(p).decode(); lib.vak_string_free(p)
     return json.loads(s)
 call({"type":"open","options":{"url":"https://example.com"}})
+```
+
+Or use the bundled SDK (the wheel bundles the cdylib; `strip=false` is applied
+internally — see `python/setup.py` — because the workspace `strip=true` corrupts
+a cdylib's `__LINKEDIT` alignment on macOS and dyld rejects it):
+
+```python
+from vakbrowse import Session
+s = Session()
+sid, url = s.open("https://example.com")
+print(s.extract(sid)["text"])          # readable main-content text
+print(s.batch(sid, [{"type":"navigate","url":"https://example.com"},
+                     {"type":"extract"}]))   # one round-trip, fail-fast
+s.close(sid)
 ```
 
 Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
@@ -297,9 +317,9 @@ bins/
 | P6 | Real-web dogfooding fixes (snapshot self-heal, fill-focuses, history) + per-session stealth/proxy + `extract` action + release workflow | **done** |
 | P7 | Action batching (`Request::Batch`+`Results` over all surfaces), proxy rotation (`RotateProxy` w/ URL restore), `--human-timing` jitter, `scripts/release.sh` | **done** |
 
-Post-roadmap ideas (not committed): pip/npm packaging of the FFI,
-WebDriver BiDi backend behind the engine trait, Servo/Lightpanda
-experimental backends, proxy rotation across endpoint pools.
+Post-roadmap ideas (not committed): WebDriver BiDi backend behind the engine
+trait, Servo/Lightpanda experimental backends. DONE in-tree: pip packaging of
+the FFI (`python/`) and proxy rotation across endpoint pools (`RotateProxy`).
 
 ## Conventions
 

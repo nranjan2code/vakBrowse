@@ -81,6 +81,30 @@ without touching outgoing responses. Covered by two real-subprocess handshake
 tests (NDJSON + Content-Length client) and three hermetic codec unit tests.
 See `AGENTS.md` for the full map and conventions.
 
+## Python SDK
+
+```bash
+pip install vakbrowse          # wheel bundles the native lib; no daemon
+```
+
+```python
+from vakbrowse import Session
+s = Session()
+sid, _ = s.open("https://example.com")
+print(s.extract(sid)["text"])          # readable main-content text
+s.batch(sid, [{"type": "navigate", "url": "https://example.com"},
+              {"type": "extract"}])    # one round-trip, fail-fast
+s.close(sid)
+```
+
+The wheel builds `crates/vakbrowse-ffi` and bundles `libvakbrowse_ffi.so`/
+`.dylib`/`.dll`. `pip install` needs a Rust toolchain once (the lib is compiled
+into the wheel, so end users don't). Or go bare-ctypes against a cargo build:
+`cargo build -p vakbrowse-ffi --release --config profile.release.strip=false`
+(the workspace `strip=true` corrupts a cdylib's `__LINKEDIT` alignment on
+macOS and dyld rejects it; the wheel disables stripping for the FFI lib only).
+
+
 ## Install (from a release tag)
 
 Download the tarball for your platform from GitHub Releases — it contains
