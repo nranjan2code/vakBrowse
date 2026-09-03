@@ -77,6 +77,9 @@ pub enum Action {
     Scroll { dx: f64, dy: f64 },
     EvalText { expression: String },
     WaitForTruthy { expression: String, timeout_ms: u64 },
+    /// SPA-safe URL wait: poll `location.href` for a substring. Agents should
+    /// use this instead of `wait_for_readyState`, which never fires on SPAs.
+    WaitForUrl { pattern: String, timeout_ms: u64 },
     Cookies,
     SetCookie { cookie: CookieInput },
     ClearCookies,
@@ -514,6 +517,10 @@ impl SessionManager {
                 timeout_ms,
             } => {
                 page.wait_for_truthy(&expression, timeout_ms).await?;
+                ActionResult::Done
+            }
+            Action::WaitForUrl { pattern, timeout_ms } => {
+                page.wait_for_url(&pattern, timeout_ms).await?;
                 ActionResult::Done
             }
             Action::Cookies => ActionResult::Cookies { cookies: page.cookies().await? },

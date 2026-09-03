@@ -259,6 +259,23 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                 &["session", "expression"],
             ),
         ),
+        Tool::new(
+            "browser_wait_url",
+            "SPA-safe URL wait: poll location.href for a substring until it matches (or \
+             time out). Use this for SPA navigations — wait on the URL, not \
+             document.readyState, which stays 'complete' across client-side routes.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    (
+                        "pattern",
+                        json!({"type": "string", "description": "substring to wait for in location.href"}),
+                    ),
+                    ("timeout_ms", json!({"type": "integer"})),
+                ],
+                &["session", "pattern"],
+            ),
+        ),
     ]
 }
 
@@ -464,6 +481,15 @@ impl VakMcp {
                 session: SessionId(arg_str(args, "session")?),
                 action: Action::WaitForTruthy {
                     expression: arg_str(args, "expression")?,
+                    timeout_ms: arg(args, "timeout_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5_000),
+                },
+            },
+            "browser_wait_url" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::WaitForUrl {
+                    pattern: arg_str(args, "pattern")?,
                     timeout_ms: arg(args, "timeout_ms")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(5_000),

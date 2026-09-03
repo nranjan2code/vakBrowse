@@ -172,6 +172,36 @@ async fn click_navigates_below_fold_element() {
     assert_eq!(hash, "#target", "below-fold click should have navigated to #target, got: {hash}");
 }
 
+#[tokio::test]
+async fn wait_for_url_matches_and_times_out() {
+    // Regression for the SPA wait trap: agents reach for
+    // `document.readyState == 'complete'`, which stays 'complete' across
+    // client-side navigations and therefore never fires *after* a pushState.
+    // `wait_for_url` polls location.href for a substring instead.
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("form.html")).await.unwrap();
+
+    // Substring of the file:// URL -> resolves immediately.
+    let href = session.eval_text("location.href").await.unwrap();
+    assert!(href.contains("form.html"), "url={href}");
+    session
+        .wait_for_url("form.html", 2_000)
+        .await
+        .expect("substring of the current URL should match");
+
+    // Non-matching pattern -> VakError::Timeout, not a hang.
+    let err = session
+        .wait_for_url("zz-never-matches-zz", 250)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, VakError::Timeout(_)),
+        "expected Timeout, got: {err}"
+    );
+}
+
 /// Live-network check. Run explicitly:
 /// `cargo test -p vakbrowse-engine --test actions -- --ignored`
 #[tokio::test]

@@ -79,6 +79,14 @@ enum Command {
         #[arg(long, default_value = "5000")]
         timeout_ms: u64,
     },
+    /// Wait until location.href contains a substring (SPA-safe).
+    #[command(visible_alias = "wait_url")]
+    WaitUrl {
+        session: String,
+        pattern: String,
+        #[arg(long, default_value = "5000")]
+        timeout_ms: u64,
+    },
     /// Capture a PNG screenshot (vision fallback).
     Shot {
         session: String,
@@ -172,6 +180,10 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 expression,
                 timeout_ms,
             },
+        ),
+        Command::WaitUrl { session, pattern, timeout_ms } => act(
+            session,
+            Action::WaitForUrl { pattern, timeout_ms },
         ),
         Command::Shot { session, full } => act(session, Action::Screenshot { full_page: full }),
         Command::ClickAt { session, x, y } => act(session, Action::ClickAt { x, y }),

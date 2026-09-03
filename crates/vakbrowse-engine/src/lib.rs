@@ -78,6 +78,13 @@ pub trait PageOps: Send {
     /// Poll `expression` until it evaluates truthy or times out.
     async fn wait_for_truthy(&self, expression: &str, timeout_ms: u64) -> Result<()>;
 
+    /// Poll the page URL until `location.href` contains `pattern` (case-sensitive
+    /// substring), then return. SPA-safe: `document.readyState` stays
+    /// `'complete'` across client-side route changes, so agents must wait on
+    /// the URL rather than on `readyState` (the trap this prevents was observed
+    /// on the Wikipedia search flow). Times out with `VakError::Timeout`.
+    async fn wait_for_url(&self, pattern: &str, timeout_ms: u64) -> Result<()>;
+
     async fn cookies(&self) -> Result<Vec<Cookie>>;
     async fn set_cookie(&mut self, cookie: &CookieInput) -> Result<()>;
     async fn clear_cookies(&self) -> Result<()>;

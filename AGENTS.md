@@ -106,10 +106,11 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   This keeps `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
 - Verified green on `linux/amd64` as root (sandbox auto-disabled) and as uid 1000
   (sandbox kept on, auto-falls back to `--no-sandbox` on the non-root sandbox
-  rejection): 55 passed / 2 ignored in both, clippy clean. The +5 over the
+  rejection): 56 passed / 2 ignored in both, clippy clean. The +6 over the
   prior 50 is: one real-stdio MCP handshake test (NDJSON, mirroring the `mcp`
-  Python SDK), one identical handshake over **Content-Length** framing, and
-  three hermetic unit tests for the `StdioFramer` input normalizer.
+  Python SDK), one identical handshake over **Content-Length** framing,
+  three hermetic unit tests for the `StdioFramer` input normalizer, and a
+  `wait_for_url` regression (match + timeout).
 
 ## Architecture map
 
@@ -130,8 +131,8 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   24 browser_* tools (tabs, history, screenshot/click-at,
-                        #   extract, webmcp, stealth/proxy on open);
+                        #   25 browser_* tools (tabs, history, screenshot/click-at,
+                        #   extract, webmcp, wait_url, stealth/proxy on open);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model
   vakbrowse-ffi         # cdylib C ABI (`vak_request(json) -> json`) w/ embedded

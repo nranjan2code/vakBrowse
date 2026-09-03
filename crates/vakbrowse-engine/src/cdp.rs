@@ -1014,6 +1014,29 @@ impl PageOps for CdpSession {
         }
     }
 
+    async fn wait_for_url(&self, pattern: &str, timeout_ms: u64) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            // location.href is a string; poll it (not readyState — which stays
+            // 'complete' across SPA navigations) so the URL match is reliable.
+            let href = self
+                .tab()
+                .page
+                .evaluate("location.href")
+                .await
+                .ok()
+                .and_then(|r| r.into_value::<String>().ok())
+                .unwrap_or_default();
+            if href.contains(pattern) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(VakError::Timeout(format!("wait_for_url: {pattern} (href={href})")));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     async fn cookies(&self) -> Result<Vec<Cookie>> {
         let resp = self
             .tab()
