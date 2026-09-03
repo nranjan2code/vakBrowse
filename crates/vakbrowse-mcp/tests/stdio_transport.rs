@@ -2,44 +2,132 @@
 //!
 //! The existing `tools.rs` integration tests drive `VakMcp::tool_call` in-process
 //! and therefore never exercise the stdio framing / init handshake that real
-//! Claude/Cursor/opencode clients go through. This test spawns the `vak-mcp`
-//! binary as a subprocess and drives it over real stdio with a minimal,
-//! dependency-free NDJSON framing client.
+//! Claude/Cursor/opencode clients go through. These tests spawn the `vak-mcp`
+//! binary as a subprocess and drive it over real stdio.
 //!
-//! ## Why NDJSON, not Content-Length
+//! ## Why vak-mcp accepts TWO framing styles
 //!
-//! rmcp 3.1.4's stdio transport is **newline-delimited JSON-RPC** on both
-//! directions: it encodes each message as `{"jsonrpc":...}\n` (see
-//! `JsonRpcMessageCodec::encode` in rmcp's `async_rw.rs`, which appends `b'\n'`)
-//! and decodes by scanning for a `\n` delimiter, parsing each line as JSON and
-//! silently skipping any line that isn't valid JSON. It does **not** implement
-//! Content-Length framing. A Content-Length-framed client sends the header
-//! (`Content-Length: 266`) as its own line, which rmcp skips, then sends the JSON
-//! body with no trailing newline — so the server never sees a complete line
-//! until stdin hits EOF, and a streaming client that keeps stdin open hangs
-//! forever waiting for a response it will only emit at EOF.
+//! rmcp 3.1.4's stdio transport is **newline-delimited JSON-RPC** (it encodes
+//! each message as `{"jsonrpc":...}\n` via `JsonRpcMessageCodec::encode` in
+//! rmcp's `async_rw.rs`, and decodes by scanning for a `\n` delimiter, parsing
+//! each line as JSON and silently skipping non-JSON lines). It does **not**
+//! implement Content-Length framing. Both official SDKs actually speak NDJSON
+//! (the `mcp` Python SDK writes `json + "\n"` and reads on `\n`; the TypeScript
+//! SDK writes `JSON.stringify(m) + '\n'` and splits reads on `'\n'` — neither
+//! sends Content-Length), so rmcp's NDJSON transport is interoperable with them
+//! as-is. BUT the MCP spec *text* describes `Content-Length: N\r\n\r\n<bytes>`
+//! framing, and some spec-literate/legacy clients send that. To be spec-robust,
+//! `vak-mcp`'s stdin is wrapped in `vakbrowse_mcp::stdio_framer::StdioFramer`,
+//! which normalizes **incoming** Content-Length blocks (and NDJSON) into
+//! newline-delimited JSON; **outgoing** responses stay NDJSON, which every SDK
+//! reads. The two tests below drive the same handshake+agent-flow once with an
+//! NDJSON client (mirrors the `mcp` Python + TS SDKs) and once with a
+//! Content-Length client (mirrors spec-literal clients) — both must succeed.
 //!
-//! The official `mcp` Python SDK uses this same NDJSON wire format: it writes
-//! `json + "\n"` (no Content-Length) and reads by splitting on `\n` (see
-//! `mcp/client/stdio.py`). So this client mirrors it exactly: `protocolVersion`
-//! `"2025-11-25"` with an empty `_meta: {}` (SEP-2575 `_meta` keys are only
-//! required for protocolVersion >= 2026-07-28; for earlier versions an empty
-//! `_meta` is sufficient). This guards the real wire contract.
-use std::path::PathBuf;
-use std::time::Duration;
-
+//! Clients offer `protocolVersion` `"2025-11-25"` with an empty `_meta: {}`.
+//! SEP-2575 `_meta` keys are only required for protocolVersion >= 2026-07-28;
+//! for earlier versions an empty `_meta` satisfies the server (rmcp's
+//! `missing_required_keys` returns empty for pre-2026-07-28 protocols).
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
-use tokio::time::timeout;
 use url::Url;
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 /// Protocol version offered to the server. Matches the official `mcp` SDK
-/// (2025-11-25), which rmcp 3.1.4 accepts; for any version < 2026-07-28 an
-/// empty `_meta` satisfies the server.
+/// (2025-11-25), which rmcp 3.1.4 accepts.
 const PROTO: &str = "2025-11-25";
 
-/// params map carrying an empty `_meta` block, mirroring the `mcp` SDK.
+#[derive(Debug, Clone, Copy)]
+enum Framing {
+    Ndjson,
+    ContentLength,
+}
+
+/// Minimal MCP stdio client supporting BOTH write framings. The response side
+/// is always NDJSON: `vak-mcp` emits NDJSON (the StdioFramer only rewrites the
+/// *incoming* (stdin) direction; rmcp's NDJSON encoder writes responses).
+struct McpStdio {
+    stdin: ChildStdin,
+    reader: BufReader<tokio::process::ChildStdout>,
+    framing: Framing,
+}
+
+impl McpStdio {
+    fn new(stdin: ChildStdin, stdout: tokio::process::ChildStdout, framing: Framing) -> Self {
+        Self {
+            stdin,
+            reader: BufReader::new(stdout),
+            framing,
+        }
+    }
+
+    async fn send(&mut self, msg: &Value) {
+        let body = serde_json::to_vec(&msg).expect("serializable json-rpc");
+        let bytes: Vec<u8> = match self.framing {
+            Framing::Ndjson => {
+                let mut b = body;
+                b.push(b'\n');
+                b
+            }
+            Framing::ContentLength => {
+                let header = format!("Content-Length: {}\r\n\r\n", body.len());
+                let mut b = header.into_bytes();
+                b.extend(body);
+                b
+            }
+        };
+        eprintln!(
+            "[stdio] -> id={:?} method={:?} framing={:?}",
+            msg.get("id"),
+            msg.get("method"),
+            self.framing
+        );
+        tokio::time::timeout(Duration::from_secs(5), self.stdin.write_all(&bytes))
+            .await
+            .expect("timeout writing to MCP server")
+            .expect("error writing to MCP server");
+        tokio::time::timeout(Duration::from_secs(5), self.stdin.flush())
+            .await
+            .expect("timeout flushing to MCP server")
+            .expect("error flushing to MCP server");
+    }
+
+    /// Read the next response (a JSON-RPC message carrying an `id`). Id-less
+    /// messages are server notifications and are skipped.
+    async fn recv_resp(&mut self) -> Value {
+        loop {
+            let mut line = Vec::new();
+            let n = tokio::time::timeout(
+                Duration::from_secs(15),
+                self.reader.read_until(b'\n', &mut line),
+            )
+            .await
+            .expect("timeout reading MCP line")
+            .expect("error reading MCP line");
+            if n == 0 {
+                panic!(
+                    "server closed stdout before a response; buffered: {:?}",
+                    String::from_utf8_lossy(&line)
+                );
+            }
+            let line = line.strip_suffix(b"\n").unwrap_or(&line);
+            let value: Value = serde_json::from_slice(line).unwrap_or_else(|e| {
+                panic!(
+                    "unparsable MCP message: {e}; bytes={:?}",
+                    String::from_utf8_lossy(line)
+                )
+            });
+            if value.get("id").is_some() {
+                return value;
+            }
+            eprintln!("[stdio] (skip notification) {:?}", value.get("method"));
+        }
+    }
+}
+
 fn params_with_meta(args: serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
     let mut p = args;
     p.insert("_meta".to_string(), Value::Object(serde_json::Map::new()));
@@ -116,107 +204,39 @@ fn image_b64(resp: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// Minimal stateful NDJSON MCP stdio client. Writes one JSON object per message
-/// (newline-terminated, no Content-Length header) and reads the next
-/// *response* — a message carrying an `id` — skipping any unsolicited
-/// notifications the server emits between responses.
-struct NdjsonStdio {
-    stdin: ChildStdin,
-    reader: BufReader<tokio::process::ChildStdout>,
-}
-
-impl NdjsonStdio {
-    async fn send(&mut self, msg: &Value) {
-        let mut bytes = serde_json::to_vec(&msg).expect("serializable json-rpc");
-        bytes.push(b'\n');
-        eprintln!(
-            "[stdio] -> id={:?} method={:?}",
-            msg.get("id"),
-            msg.get("method")
-        );
-        timeout(Duration::from_secs(5), self.stdin.write_all(&bytes))
-            .await
-            .expect("timeout writing to MCP server")
-            .expect("error writing to MCP server");
-        timeout(Duration::from_secs(5), self.stdin.flush())
-            .await
-            .expect("timeout flushing to MCP server")
-            .expect("error flushing to MCP server");
-    }
-
-    /// Read the next response (a JSON-RPC message carrying an `id`). Id-less
-    /// messages are server notifications and are skipped.
-    async fn recv_resp(&mut self) -> Value {
-        loop {
-            let mut line = Vec::new();
-            let n = timeout(
-                Duration::from_secs(15),
-                self.reader.read_until(b'\n', &mut line),
-            )
-            .await
-            .expect("timeout reading MCP line")
-            .expect("error reading MCP line");
-            if n == 0 {
-                panic!(
-                    "server closed stdout before a response; buffered: {:?}",
-                    String::from_utf8_lossy(&line)
-                );
-            }
-            let line = line.strip_suffix(b"\n").unwrap_or(&line);
-            let value: Value = serde_json::from_slice(line).unwrap_or_else(|e| {
-                panic!(
-                    "unparsable MCP message: {e}; bytes={:?}",
-                    String::from_utf8_lossy(line)
-                )
-            });
-            if value.get("id").is_some() {
-                return value;
-            }
-            eprintln!("[stdio] (skip notification) {:?}", value.get("method"));
-        }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn mcp_stdio_handshake_full_agent_flow() {
-    // Spawn the real `vak-mcp` binary; no env allowlist => empty prefix list
-    // => allow all (scheme still gated by validate_url, which permits file://).
+/// Spawn the real `vak-mcp` binary (stderr redirected to a file to avoid the
+/// 64KB pipe-fill deadlock that Chrome's sandbox/GPU warnings would cause).
+fn spawn_vak_mcp() -> tokio::process::Child {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bin = format!("{manifest_dir}/../../target/debug/vak-mcp");
-    // Chrome emits sandbox/GPU warnings on stderr; a piped stderr that we never
-    // drain would fill the 64KB OS pipe and deadlock the child. Redirect to a
-    // file instead so vak-mcp never blocks on stderr writes.
     let stderr_file =
         std::fs::File::create("/tmp/vakmcp_stdiotest_stderr.log").expect("stderr log file");
-    let mut child = Command::new(&bin)
+    Command::new(&bin)
         .kill_on_drop(true)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::from(stderr_file))
         .env("RUST_LOG", "rmcp=debug")
         .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn {bin}: {e}"));
-    let stdin = child.stdin.take().expect("stdin piped");
-    let stdout = child.stdout.take().expect("stdout piped");
-    let mut io = NdjsonStdio {
-        stdin,
-        reader: BufReader::new(stdout),
-    };
+        .unwrap_or_else(|e| panic!("failed to spawn {bin}: {e}"))
+}
 
+/// The full agent-style flow driven identically for both framings:
+/// init -> initialized -> tools/list -> open form.html -> snapshot (@e1) ->
+/// screenshot (real PNG) -> close.
+async fn drive_full_agent_flow(io: &mut McpStdio) {
     // 1) initialize
-    io.send(
-        &serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": PROTO,
-                "capabilities": {},
-                "clientInfo": { "name": "vak-test", "version": "1" },
-                "_meta": {},
-            },
-        }),
-    )
+    io.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": PROTO,
+            "capabilities": {},
+            "clientInfo": { "name": "vak-test", "version": "1" },
+            "_meta": {},
+        },
+    }))
     .await;
     let init = io.recv_resp().await;
     assert_eq!(
@@ -229,14 +249,15 @@ async fn mcp_stdio_handshake_full_agent_flow() {
         None,
         "initialize returned an error: {init}"
     );
-    let server_info = init
-        .get("result")
-        .and_then(|r| r.get("serverInfo"))
-        .and_then(|s| s.get("name").and_then(|n| n.as_str()));
-    assert_eq!(server_info, Some("vakBrowse"), "init result: {init}");
+    assert_eq!(
+        init.get("result")
+            .and_then(|r| r.get("serverInfo"))
+            .and_then(|s| s.get("name").and_then(|n| n.as_str())),
+        Some("vakBrowse"),
+        "init result: {init}"
+    );
 
-    // 2) initialized notification (NDJSON; rmcp does not require this to be
-    //    acknowledged, but real clients send it to complete the handshake).
+    // 2) initialized notification (completes the handshake)
     io.send(&notification("notifications/initialized")).await;
 
     // 3) tools/list
@@ -299,7 +320,30 @@ async fn mcp_stdio_handshake_full_agent_flow() {
         "close: {}",
         text_of(&close)
     );
+}
 
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_stdio_ndjson_client() {
+    let mut child = spawn_vak_mcp();
+    let mut io = McpStdio::new(
+        child.stdin.take().expect("stdin piped"),
+        child.stdout.take().expect("stdout piped"),
+        Framing::Ndjson,
+    );
+    drive_full_agent_flow(&mut io).await;
     drop(io);
-    let _ = timeout(Duration::from_secs(5), child.wait()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_stdio_content_length_client() {
+    let mut child = spawn_vak_mcp();
+    let mut io = McpStdio::new(
+        child.stdin.take().expect("stdin piped"),
+        child.stdout.take().expect("stdout piped"),
+        Framing::ContentLength,
+    );
+    drive_full_agent_flow(&mut io).await;
+    drop(io);
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 }

@@ -2546,6 +2546,7 @@ dependencies = [
  "rmcp",
  "serde_json",
  "tokio",
+ "tracing",
  "tracing-subscriber",
  "url",
  "vakbrowse-core",

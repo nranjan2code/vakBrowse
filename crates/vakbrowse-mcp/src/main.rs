@@ -1,6 +1,7 @@
 //! Thin stdio wrapper around the vakbrowse-mcp library.
 
 use rmcp::ServiceExt;
+use vakbrowse_mcp::stdio_framer::normalize_stdin;
 use vakbrowse_mcp::VakMcp;
 use vakbrowse_server::Policy;
 
@@ -24,8 +25,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect(),
     };
 
+    // Wrap the client's stdin in a framing normalizer so vak-mcp accepts BOTH
+    // Content-Length-block and newline-delimited-JSON (NDJSON) input framing.
+    // rmcp's `AsyncRwTransport` speaks NDJSON; the normalizer rewrites any
+    // incoming Content-Length frames into NDJSON lines. Outgoing responses
+    // stay NDJSON, which is what the official `mcp` Python + TS SDKs read.
+    let (stdin, stdout) = rmcp::transport::stdio();
+    let framed_stdin = normalize_stdin(stdin);
+
     let service = VakMcp::new(policy)
-        .serve(rmcp::transport::stdio())
+        .serve((framed_stdin, stdout))
         .await?;
     service.waiting().await?;
     Ok(())

@@ -3,6 +3,8 @@
 //!
 //! Tool logic lives in `VakMcp::tool_call`, free of protocol plumbing, so
 //! it is directly unit-testable without a transport.
+pub mod stdio_framer;
+
 use std::sync::Arc;
 
 use rmcp::{

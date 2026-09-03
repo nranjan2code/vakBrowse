@@ -106,9 +106,10 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   This keeps `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
 - Verified green on `linux/amd64` as root (sandbox auto-disabled) and as uid 1000
   (sandbox kept on, auto-falls back to `--no-sandbox` on the non-root sandbox
-  rejection): 51 passed / 2 ignored in both, clippy clean. The +1 over the
-  prior 50 is the new `crates/vakbrowse-mcp/tests/stdio_transport.rs` real-stdio
-  handshake test (NDJSON framing, see Key facts).
+  rejection): 55 passed / 2 ignored in both, clippy clean. The +5 over the
+  prior 50 is: one real-stdio MCP handshake test (NDJSON, mirroring the `mcp`
+  Python SDK), one identical handshake over **Content-Length** framing, and
+  three hermetic unit tests for the `StdioFramer` input normalizer.
 
 ## Architecture map
 
@@ -212,26 +213,28 @@ bins/
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),
   zip v8 extraction. CDP gotcha: in `Runtime.callFunctionOn` the resolved DOM
   node arrives as `this`, not as an argument.
-- **MCP stdio is NDJSON, matching both official SDKs.** rmcp 3.1.4's
-  `transport::stdio()` (used by `vak-mcp`'s `serve(rmcp::transport::stdio())`)
-  wraps stdin/stdout in `AsyncRwTransport` whose `JsonRpcMessageCodec`
-  **encode** writes `{"jsonrpc":...}\n` and **decode** reads newline-terminated
-  lines (skipping any non-JSON line). There is no `Content-Length` handling in
-  the transport layer. This is **not a gap**: the official `mcp` Python SDK
-  (`client/stdio.py` writes `json + "\n"`, reads by splitting on `\n`) and the
-  official `@modelcontextprotocol/sdk` TypeScript SDK (v1.26 `shared/stdio.js`:
+- **MCP stdio accepts BOTH NDJSON and Content-Length framing.** rmcp 3.1.4's
+  `transport::stdio()` / `AsyncRwTransport` speaks NDJSON only: `JsonRpcMessageCodec`
+  encodes `{"jsonrpc":...}\n` and decodes by scanning for a `\n` delimiter
+  (silently skipping any non-JSON line). Both official SDKs are NDJSON too —
+  the `mcp` Python SDK (`client/stdio.py` writes `json + "\n"`, reads on `\n`)
+  and `@modelcontextprotocol/sdk` TypeScript v1.26 (`shared/stdio.js`:
   `serializeMessage = JSON.stringify(msg) + '\n'`; `ReadBuffer` splits on `'\n'`;
-  zero `Content-Length` references in the entire package) both use NDJSON too —
-  so vak-mcp interoperates with Claude/Cursor/opencode out of the box. A
-  spec-literal Content-Length-only custom client would not speak to it (rmcp
-  itself shares this limitation, so it is an ecosystem-wide convention, not a
-  vakBrowse bug). Note the framing trap it DID cause: a Content-Length-framed
-  client sends the `Content-Length: N` header as its own line (silently
-  skipped) and the body with no trailing newline, so the server only reads it at
-  EOF — a streaming client that keeps stdin open hangs. The in-repo
-  `stdio_transport` test uses NDJSON to mirror the real SDKs
-  (`protocolVersion "2025-11-25"`, empty `_meta: {}`; SEP-2575 `_meta` keys are
-  only required for protocolVersion >= 2026-07-28).
+  zero `Content-Length` references in the whole package) — so vak-mcp
+  interoperated with Claude/Cursor/opencode even before this change. To also
+  serve spec-literal Content-Length clients (the MCP spec *text* describes
+  `Content-Length: N\r\n\r\n<bytes>`), `vak-mcp`'s **stdin** is wrapped in
+  `vakbrowse_mcp::stdio_framer::StdioFramer` (`crates/vakbrowse-mcp/src/
+  stdio_framer.rs`). It is a byte-level framing normalizer (no JSON parsing):
+  a `tokio::io::duplex` transducer driven by `BufReader::read_until` /
+  `read_exact` re-emits every incoming message — whether Content-Length-block
+  or NDJSON-line, mixed freely — as an NDJSON line for rmcp's decoder. It never
+  touches the write side, so **outgoing** responses stay NDJSON and every SDK
+  reads them. Clients offer `protocolVersion "2025-11-25"` with empty `_meta:{}`.
+  SEP-2575 `_meta` keys are only required for protocolVersion >= 2026-07-28;
+  for earlier versions empty `_meta` satisfies the server. Covered by two
+  real-subprocess handshake tests (NDJSON + Content-Length client) and three
+  hermetic codec unit tests.
 - Error model: `handle()` always returns `Result<ResponsePayload, String>`
   where app-level failures are `Ok(ResponsePayload::Error(ServiceError))`;
   `Err(String)` is reserved for handler-panic transport errors. `ServiceError`
