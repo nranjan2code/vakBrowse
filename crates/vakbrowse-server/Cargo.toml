@@ -16,8 +16,18 @@ tracing = { workspace = true }
 dirs = "6"
 futures.workspace = true
 base64 = "0.23.1"
+vakbrowse-dom = { workspace = true, optional = true }
+
+[features]
+## Opt into the experimental non-Chromium DOM backend (QuickJS, no Chrome
+## process). When enabled, `SessionOptions.backend = "dom"` opens a `DomLauncher`
+## session instead of the default CDP/chrome shell. Off by default to keep the
+## daemon binary chrome-only and avoid linking QuickJS into default builds.
+dom-backend = ["dep:vakbrowse-dom"]
 
 [dev-dependencies]
 futures.workspace = true
 tempfile = "3"
 url.workspace = true
+vakbrowse-dom = { workspace = true }
+vakbrowse-engine = { workspace = true }

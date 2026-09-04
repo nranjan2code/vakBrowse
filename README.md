@@ -17,9 +17,12 @@ vakBrowse/
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
-│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 27 browser_* tools
+│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 28 browser_*
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
-│   └── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
+│   ├── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
+│   └── vakbrowse-dom         # Experimental pure-Rust backend (no browser
+│                             #   process, no JS engine; `file://`-only). Swaps
+│                             #   into the same SessionManager via DomLauncher
 ├── bins/vakd                 # daemon (session pool, profiles, policy)
 └── tests/fixtures            # offline fixture pages
 ```
@@ -29,7 +32,7 @@ capability once, all five surfaces get it.
 
 ## Status
 
-**Roadmap P0–P6 complete.**
+**Roadmap P0–P7 complete; P8 (experimental DOM backend) done.**
 
 - **Core (P0–P1)** — chrome-headless-shell download/pin/cache; a11y snapshots
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
@@ -60,10 +63,36 @@ capability once, all five surfaces get it.
   sub-150ms randomized input delays (cadence tell, no TLS spoofing);
   `scripts/release.sh` bakes the pinned engine + gates mac/linux-root/
   linux-uid1000 green.
+- **Experimental non-Chromium backend (P8)** — `vakbrowse-dom`
+  (`DomLauncher`): an **optional** chrome-free backend (`cargo build
+  --features vakbrowse-server/dom-backend`) that implements the full
+  `EngineLauncher`/`PageOps` seam and swaps into `SessionManager` with zero
+  chrome. QuickJS (`quick-js`) runs on a dedicated thread behind an `mpsc`
+  bridge; it parses HTML in-process and drives the **same** `Request::Batch` /
+  `RotateProxy` / fill→snapshot model as CDP. Opt-in per session
+  (`vak open --backend dom`, `browser_open {backend:"dom"}`, REST
+  `{"options":{"backend":"dom"}}`); omit `backend` to defer to the server-wide
+  default (`VAKBROWSE_BACKEND=cdp|dom`, CDP unless overridden; honored by
+  `vakd serve` and `vakd-rest`). `Backend::Dom` requested without the feature
+  fails loud instead of silently falling back to Chrome. The backend now
+  supports `eval_text`, `wait_for_truthy`, inline `<script>` execution on
+  `load`, reactive `location`, `document.getElementById` (read/write
+  `textContent`/`value`), and `addEventListener`/`Event`/`requestSubmit` form
+  dispatch. Honest limits: **no layout, no network** — used for hermetic,
+  fast, chrome-free tests of the wire command model. Build the Docker image
+  with `-e VAKBROWSE_BACKEND=dom` to run the REST server entirely chrome-free.
 
-64 tests, clippy clean. Hardened against real environments: launch args verified
+101 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
-root/hardened runners (validated in linux containers as root *and* non-root). Honest bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
+root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
+now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):
+anchor clicks are probed for a URL change (ground truth, not the unreliable
+`wait_for_navigation` result) so a bot-wall click — Bing/DDG accept the click
+but never navigate — surfaces as `navigated:false` + a daemon WARN, then
+**recovers** via a ground-truth DOM `.click()` and a forced `location.href =`
+assignment (defeats click-interception walls; proven by the `preventDefault`
+fixture) before giving up honestly, instead of the old silent `Done`. Honest
+bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
 mouse-event click AND a ground-truth DOM `element.click()` both leave the
 browser on the SERP, even under `--stealth` — their detection is behavioral,
 not webdriver-level), and DuckDuckGo CAPTCHAs / serves an empty shell
@@ -122,6 +151,8 @@ cargo test --workspace             # hermetic test suite
 ./target/release/vakd serve &
 ./target/release/vak --socket /tmp/vakd.sock open https://example.com
 ./target/release/vak --socket /tmp/vakd.sock snapshot s1
+./target/release/vak --socket /tmp/vakd.sock find s1 'a[href*="iana"]'   # CSS -> @eN refs
+./target/release/vak --socket /tmp/vakd.sock click s1 @e1            # click that ref
 ./target/release/vak --socket /tmp/vakd.sock extract s1
 
 # MCP server for Claude/Cursor/opencode: command = target/release/vak-mcp

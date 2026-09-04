@@ -7,8 +7,8 @@
 //! behavioral biometrics or TLS fingerprinting.
 
 use serde::{Deserialize, Serialize};
-use vakbrowse_core::Result;
 use std::fmt::Write as _;
+use vakbrowse_core::Result;
 
 /// A coherent hardware/locale identity derived deterministically from a
 /// seed (e.g. the profile id) so an agent's sessions look like the same
@@ -118,14 +118,26 @@ pub fn mouse_path(from: (f64, f64), to: (f64, f64), seed: u64, steps: usize) -> 
         let x = fnv1a(&[(seed >> i) as u8, (seed >> (i + 8)) as u8, i as u8]);
         (x % 200) as f64 / 100.0 - 1.0 // -1..1
     };
-    let c1 = (from.0 + dx * 0.25 + n(0) * 40.0, from.1 + dy * 0.25 + n(1) * 40.0);
-    let c2 = (from.0 + dx * 0.75 + n(2) * 30.0, from.1 + dy * 0.75 + n(3) * 30.0);
+    let c1 = (
+        from.0 + dx * 0.25 + n(0) * 40.0,
+        from.1 + dy * 0.25 + n(1) * 40.0,
+    );
+    let c2 = (
+        from.0 + dx * 0.75 + n(2) * 30.0,
+        from.1 + dy * 0.75 + n(3) * 30.0,
+    );
 
     let bez = |t: f64| -> (f64, f64) {
         let mt = 1.0 - t;
         (
-            mt * mt * mt * from.0 + 3.0 * mt * mt * t * c1.0 + 3.0 * mt * t * t * c2.0 + t * t * t * to.0,
-            mt * mt * mt * from.1 + 3.0 * mt * mt * t * c1.1 + 3.0 * mt * t * t * c2.1 + t * t * t * to.1,
+            mt * mt * mt * from.0
+                + 3.0 * mt * mt * t * c1.0
+                + 3.0 * mt * t * t * c2.0
+                + t * t * t * to.0,
+            mt * mt * mt * from.1
+                + 3.0 * mt * mt * t * c1.1
+                + 3.0 * mt * t * t * c2.1
+                + t * t * t * to.1,
         )
     };
     (0..=steps)

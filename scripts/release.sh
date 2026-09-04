@@ -19,8 +19,9 @@ fi
 
 # 1. Bake the engine binary (chrome-headless-shell) into the local cache so the
 #    Docker images + release artifacts are self-contained. --no-probe avoids a
-#    live launch in offline/sandboxed contexts.
-cargo build -p vakd
+#    live launch in offline/sandboxed contexts. The `dom-backend` feature is
+#    enabled so the daemon ships chrome-free sessions too.
+cargo build -p vakd --features vakbrowse-server/dom-backend
 target/debug/vakd doctor --no-probe
 
 # 2. Green gate across all three environments. Each writes to its own log dir.

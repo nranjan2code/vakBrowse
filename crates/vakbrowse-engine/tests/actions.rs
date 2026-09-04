@@ -17,11 +17,7 @@ fn fixture_url(name: &str) -> String {
         .to_string()
 }
 
-fn find<'a>(
-    snap: &'a vakbrowse_core::Snapshot,
-    role: &str,
-    name: &str,
-) -> Option<&'a ElementRef> {
+fn find<'a>(snap: &'a vakbrowse_core::Snapshot, role: &str, name: &str) -> Option<&'a ElementRef> {
     snap.elements
         .iter()
         .find(|e| e.role == role && e.name.contains(name))
@@ -95,6 +91,180 @@ async fn fill_select_click_wait_roundtrip() {
     assert!(matches!(err, VakError::Timeout(_)));
 }
 
+/// CSS selector resolution on the real Chrome (CDP) backend must return the
+/// same `@eN` refs that `snapshot`+`click` use, so `find_by_css` → `click`
+/// round-trips identically to the snapshot path. Uses `links.html`'s
+/// `<a href="form.html">` found by an exact attribute matcher.
+#[tokio::test]
+async fn find_by_css_on_cdp_resolves_clickable_ref() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("links.html")).await.unwrap();
+
+    let refs = session
+        .find_by_css("a[href=\"form.html\"]")
+        .await
+        .expect("find_by_css");
+    assert_eq!(refs.len(), 1, "exactly one anchor matches: {refs:?}");
+    // Found by CSS must equal the ref the snapshot assigns to the same element.
+    let snap = session.snapshot().await.unwrap();
+    let link = snap
+        .elements
+        .iter()
+        .find(|e| e.role == "link" && e.name.contains("form"))
+        .map(|e| e.r#ref.clone());
+    assert_eq!(link.as_ref(), Some(&refs[0]));
+
+    // And the CSS-found ref is immediately clickable to a real navigation.
+    let out = session.click(&refs[0]).await.expect("click");
+    assert!(out.navigated, "click via css-found ref should navigate");
+    assert!(
+        out.url.as_deref().unwrap_or("").ends_with("form.html"),
+        "expected to land on form.html, got {out:?}"
+    );
+}
+
+/// A valid CSS selector on the CDP backend resolves to real, snapshot-consistent
+/// `@eN` refs (same refs `snapshot` assigns), so agent code can `find_by_css`
+/// then `click` exactly as the snapshot path does. `links.html` exposes two
+/// anchors via `a[href]`.
+#[tokio::test]
+async fn find_by_css_on_cdp_resolves_snapshot_consistent_refs() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("links.html")).await.unwrap();
+
+    let ok = session
+        .find_by_css("a[href]")
+        .await
+        .expect("a[href] is valid CSS");
+    assert_eq!(ok.len(), 2, "links.html has two anchors: {ok:?}");
+
+    // The resolved refs match the snapshot's @eN for the same elements, so the
+    // two code paths agree on a stable handle.
+    let snap = session.snapshot().await.unwrap();
+    let links: Vec<&ElementRef> = snap
+        .elements
+        .iter()
+        .filter(|e| e.role == "link")
+        .map(|e| &e.r#ref)
+        .collect();
+    assert_eq!(links.len(), 2);
+    for r in &ok {
+        assert!(
+            links.contains(&r),
+            "css-found ref {r} not in snapshot links {links:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn click_reports_navigation_outcome() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    use vakbrowse_engine::ClickResult;
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&fixture_url("links.html")).await.unwrap();
+
+    let snap = session.snapshot().await.unwrap();
+    let nav_link = find(&snap, "link", "Go to the form").unwrap().clone();
+    let noop_link = find(&snap, "link", "no-op").unwrap().clone();
+
+    // A `javascript:` anchor does not navigate: report it before the navigating
+    // anchor (whose document swap would invalidate its ref).
+    let noop = session.click(&noop_link).await.unwrap();
+    assert!(
+        matches!(
+            noop,
+            ClickResult {
+                navigated: false,
+                url: None
+            }
+        ),
+        "got {noop:?}"
+    );
+
+    // A real navigating anchor: click should report navigated + new URL.
+    let out = session.click(&nav_link).await.unwrap();
+    assert!(
+        matches!(
+            out,
+            ClickResult {
+                navigated: true,
+                ..
+            }
+        ),
+        "navigated, got {out:?}"
+    );
+    let url = out.url.unwrap();
+    assert!(url.ends_with("form.html"), "navigated url was: {url}");
+}
+
+#[tokio::test]
+async fn click_recovers_from_preventdefault_wall() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    use vakbrowse_engine::ClickResult;
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session
+        .navigate(&fixture_url("blocked.html"))
+        .await
+        .unwrap();
+
+    let snap = session.snapshot().await.unwrap();
+    let blocked = find(&snap, "link", "click blocked").unwrap().clone();
+
+    // The link's `click` listener calls preventDefault(), blocking both the
+    // trusted mouse dispatch and the ground-truth DOM .click(). The recovery
+    // ladder should still land us on form.html via the forced location.href.
+    let out = session.click(&blocked).await.unwrap();
+    assert!(
+        matches!(
+            out,
+            ClickResult {
+                navigated: true,
+                ..
+            }
+        ),
+        "expected recovered navigation, got {out:?}"
+    );
+    let url = out.url.unwrap();
+    assert!(url.ends_with("form.html"), "recovered url was: {url}");
+
+    let landed = session.snapshot().await.unwrap();
+    assert!(landed.title.contains("Form"));
+}
+
+#[tokio::test]
+async fn extract_prefers_prose_over_linkdense_sidebar() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session
+        .navigate(&fixture_url("reading.html"))
+        .await
+        .unwrap();
+
+    let extracted = session.extract().await.unwrap();
+    let text = extracted.text;
+    // The real prose must be selected, not the (longer) link-dense sidebar.
+    assert!(
+        text.contains("Real main content the agent reads."),
+        "expected article prose, got: {text}"
+    );
+    assert!(
+        !text.contains("Navigation item one"),
+        "sidebar link-chrome leaked into extract: {text}"
+    );
+    assert!(
+        extracted.title.contains("Reading-density"),
+        "got: {}",
+        extracted.title
+    );
+}
+
 #[tokio::test]
 async fn cookies_and_downloads_configurable() {
     let _g = common::browser_lock().acquire().await.unwrap();
@@ -103,15 +273,18 @@ async fn cookies_and_downloads_configurable() {
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 
     session.set_download_dir(tmp.path()).await.unwrap();
-    session.set_cookie(&vakbrowse_core::CookieInput {
-        name: "k".into(),
-        value: "v".into(),
-        domain: "example.com".into(),
-        path: "/".into(),
-        secure: false,
-        http_only: false,
-        same_site: Some("Strict".into()),
-    }).await.unwrap();
+    session
+        .set_cookie(&vakbrowse_core::CookieInput {
+            name: "k".into(),
+            value: "v".into(),
+            domain: "example.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+            same_site: Some("Strict".into()),
+        })
+        .await
+        .unwrap();
 
     // file:// origin doesn't expose example.com cookies; read them via CDP-level list.
     let all = session.cookies().await.unwrap();
@@ -132,24 +305,39 @@ async fn eval_text_coerces_non_string_primitives() {
     // rather than hard-failing ("invalid type: boolean, expected a string"),
     // which is how the canonical `navigator.webdriver` stealth check broke.
     let b = session.eval_text("navigator.webdriver").await.unwrap();
-    assert!(b == "true" || b == "false", "boolean must stringify to true/false, got: {b}");
+    assert!(
+        b == "true" || b == "false",
+        "boolean must stringify to true/false, got: {b}"
+    );
     let n = session.eval_text("1 + 2").await.unwrap();
     assert_eq!(n, "3", "number result must stringify, got: {n}");
     let z = session.eval_text("null").await.unwrap();
     assert_eq!(z, "null", "null must stringify, got: {z}");
-    let s = session.eval_text("document.querySelector('form') ? 'has-form' : 'no-form'").await.unwrap();
+    let s = session
+        .eval_text("document.querySelector('form') ? 'has-form' : 'no-form'")
+        .await
+        .unwrap();
     assert_eq!(s, "has-form");
     // Unserializable primitives and `undefined` must not collapse to "null".
     let u = session.eval_text("undefined").await.unwrap();
-    assert_eq!(u, "undefined", "undefined must stringify to \"undefined\", got: {u}");
+    assert_eq!(
+        u, "undefined",
+        "undefined must stringify to \"undefined\", got: {u}"
+    );
     let nan = session.eval_text("NaN").await.unwrap();
     assert_eq!(nan, "NaN", "NaN must stringify to \"NaN\", got: {nan}");
     let inf = session.eval_text("Infinity").await.unwrap();
     assert_eq!(inf, "Infinity", "Infinity must stringify, got: {inf}");
     let ninf = session.eval_text("-Infinity").await.unwrap();
     assert_eq!(ninf, "-Infinity", "got: {ninf}");
-    let bigint = session.eval_text("BigInt('12345678901234567890')").await.unwrap();
-    assert!(bigint.contains("12345678901234567890"), "BigInt lost precision: {bigint}");
+    let bigint = session
+        .eval_text("BigInt('12345678901234567890')")
+        .await
+        .unwrap();
+    assert!(
+        bigint.contains("12345678901234567890"),
+        "BigInt lost precision: {bigint}"
+    );
 }
 
 #[tokio::test]
@@ -162,14 +350,20 @@ async fn click_navigates_below_fold_element() {
     let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
-    session.navigate(&fixture_url("scroll_click.html")).await.unwrap();
+    session
+        .navigate(&fixture_url("scroll_click.html"))
+        .await
+        .unwrap();
 
     let snap = session.snapshot().await.unwrap();
     let far = find(&snap, "link", "far link").cloned().unwrap();
     // Clicking the off-screen link must navigate to #target.
     session.click(&far).await.unwrap();
     let hash = session.eval_text("location.hash").await.unwrap();
-    assert_eq!(hash, "#target", "below-fold click should have navigated to #target, got: {hash}");
+    assert_eq!(
+        hash, "#target",
+        "below-fold click should have navigated to #target, got: {hash}"
+    );
 }
 
 #[tokio::test]

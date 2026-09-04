@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use vakbrowse_engine::cft;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
-use vakbrowse_server::{Policy, Request, SessionManager};
+use vakbrowse_server::{Backend, Policy, Request, SessionManager};
 
 #[derive(Parser)]
 #[command(name = "vakd", version, about = "vakBrowse daemon")]
@@ -43,8 +43,7 @@ enum Commands {
 async fn main() -> vakbrowse_core::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -81,7 +80,15 @@ async fn serve(
     policy: Policy,
     pool: vakbrowse_server::PoolConfig,
 ) -> vakbrowse_core::Result<()> {
-    let manager = Arc::new(SessionManager::with_policy(policy).with_pool(pool));
+    let default_backend = std::env::var("VAKBROWSE_BACKEND")
+        .ok()
+        .map(|s| match s.to_ascii_lowercase().as_str() {
+            "dom" => Backend::Dom,
+            _ => Backend::Cdp,
+        })
+        .unwrap_or(Backend::Cdp);
+    let manager =
+        Arc::new(SessionManager::with_policy_and_backend(policy, default_backend).with_pool(pool));
     manager.spawn_reaper();
     let path = std::path::PathBuf::from(socket);
     // Ctrl-C kills the process; the socket file is removed on next start.
@@ -97,7 +104,12 @@ async fn status(socket: &str) -> vakbrowse_core::Result<()> {
                 println!("no live sessions");
             }
             for s in sessions {
-                println!("{} profile={:?} url={}", s.id, s.profile.as_ref().map(|p| p.0.clone()), s.url);
+                println!(
+                    "{} profile={:?} url={}",
+                    s.id,
+                    s.profile.as_ref().map(|p| p.0.clone()),
+                    s.url
+                );
             }
             Ok(())
         }
@@ -151,9 +163,105 @@ async fn doctor(no_probe: bool) -> vakbrowse_core::Result<()> {
             snap.elements.len()
         );
         drop(session);
+
+        // Wire-model self-test: drive the *daemon* dispatch (SessionManager ->
+        // Request/Action/Policy -> ResponsePayload), not just the raw engine.
+        // A `data:` URL keeps it self-contained (no fixture files shipped with
+        // the binary) and offline. Catches regressions in policy enforcement,
+        // batch fail-fast, and ActionResult classification that the raw engine
+        // probe above cannot see.
+        wire_self_test().await?;
         println!("  probe    : ok");
     }
 
     println!("all checks passed");
+    Ok(())
+}
+
+/// Exercise the same `SessionManager::handle` path the daemon serves, against a
+/// `data:` page — open/snapshot/click/extract/batch/close, asserting each wire
+/// shape. The button here has no navigation handler, so the click is expected
+/// to return `Done`; this tests dispatch/classification, not navigation.
+async fn wire_self_test() -> vakbrowse_core::Result<()> {
+    use vakbrowse_core::{SessionId, VakError};
+    use vakbrowse_server::{Action, ActionResult, Request, ResponsePayload, SessionManager};
+
+    let manager = SessionManager::default();
+    let url = "data:text/html,<title>probe</title><button id=b>Click me</button>";
+
+    let opened = manager
+        .handle(Request::Open {
+            options: vakbrowse_server::SessionOptions {
+                url: Some(url.to_string()),
+                ..vakbrowse_server::SessionOptions::default()
+            },
+        })
+        .await
+        .map_err(|e| VakError::Engine(format!("wire open: {e}")))?;
+    let id = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => return Err(VakError::Engine(format!("wire open shape: {other:?}"))),
+    };
+
+    // Snapshot: find the button by a11y role/name, then click its @eN ref.
+    let snap = manager
+        .act(&id, Action::Snapshot)
+        .await
+        .map_err(|e| VakError::Engine(format!("wire snapshot: {e}")))?;
+    let button_ref = match snap {
+        ActionResult::Snapshot { snapshot } => snapshot
+            .elements
+            .iter()
+            .find(|e| e.role == "button" && e.name == "Click me")
+            .map(|e| e.r#ref.0.clone()),
+        other => return Err(VakError::Engine(format!("wire snapshot shape: {other:?}"))),
+    }
+    .ok_or_else(|| VakError::Engine("wire: button not in snapshot".into()))?;
+
+    let clicked = manager
+        .act(&id, Action::Click { r#ref: button_ref })
+        .await
+        .map_err(|e| VakError::Engine(format!("wire click: {e}")))?;
+    assert!(
+        matches!(
+            clicked,
+            ActionResult::Clicked {
+                navigated: false,
+                url: None
+            }
+        ),
+        "click -> Clicked{{navigated=false}}, got {clicked:?}"
+    );
+
+    let extracted = manager
+        .act(&id, Action::Extract)
+        .await
+        .map_err(|e| VakError::Engine(format!("wire extract: {e}")))?;
+    match extracted {
+        ActionResult::Text { text } if text.contains("Click me") => {}
+        other => return Err(VakError::Engine(format!("wire extract shape: {other:?}"))),
+    }
+
+    // Batch: one result per action, fail-fast on first error.
+    let batched = manager
+        .handle(Request::Batch {
+            session: id.clone(),
+            actions: vec![Action::Snapshot, Action::Extract],
+        })
+        .await
+        .map_err(|e| VakError::Engine(format!("wire batch: {e}")))?;
+    match batched {
+        ResponsePayload::Results(results) if results.len() == 2 => {}
+        other => return Err(VakError::Engine(format!("wire batch shape: {other:?}"))),
+    }
+
+    let closed = manager
+        .handle(Request::Close { session: id })
+        .await
+        .unwrap();
+    assert!(matches!(closed, ResponsePayload::Closed(true)));
+
+    println!("             wire   : open/snapshot/click/extract/batch/close ok");
+    let _ = SessionId::new("wire");
     Ok(())
 }

@@ -41,7 +41,13 @@ const INTERACTIVE_ROLES: &[&str] = &[
 ];
 
 /// Roles that are page chrome for humans but noise for agents.
-const SKIPPED_ROLES: &[&str] = &["banner", "contentinfo", "complementary", "none", "presentation"];
+const SKIPPED_ROLES: &[&str] = &[
+    "banner",
+    "contentinfo",
+    "complementary",
+    "none",
+    "presentation",
+];
 
 /// Allocates and remembers element refs so the same AX node keeps its ref
 /// across consecutive snapshots; refs are invalidated by navigation (callers
@@ -92,8 +98,7 @@ pub fn build_snapshot(
     flat: &[FlatAxNode],
     book: &mut RefBook,
 ) -> SnapshotBuild {
-    let by_id: HashMap<&str, &FlatAxNode> =
-        flat.iter().map(|n| (n.id.as_str(), n)).collect();
+    let by_id: HashMap<&str, &FlatAxNode> = flat.iter().map(|n| (n.id.as_str(), n)).collect();
 
     let mut order: Vec<&FlatAxNode> = Vec::with_capacity(flat.len());
     let mut stack: Vec<String> = Vec::new();
@@ -190,7 +195,12 @@ mod tests {
         let mut book = RefBook::new();
         let build = build_snapshot("u", "t", &flat, &mut book);
 
-        let roles: Vec<&str> = build.snapshot.elements.iter().map(|e| e.role.as_str()).collect();
+        let roles: Vec<&str> = build
+            .snapshot
+            .elements
+            .iter()
+            .map(|e| e.role.as_str())
+            .collect();
         assert_eq!(roles, ["textbox", "button", "link"]);
         assert_eq!(build.snapshot.elements[0].r#ref.0, "@e1");
         assert_eq!(build.snapshot.elements[0].name, "Your name");

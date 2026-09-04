@@ -18,9 +18,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use vakbrowse_core::{ProfileId, SessionId};
-use vakbrowse_server::{
-    Action, ActionResult, Policy, Request, ResponsePayload, SessionManager,
-};
+use vakbrowse_server::{Action, ActionResult, Policy, Request, ResponsePayload, SessionManager};
 
 fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> JsonObject {
     let mut properties = serde_json::Map::new();
@@ -49,29 +47,64 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             "Open a new browser session, optionally navigating to a URL. Returns a session id.",
             schema(
                 vec![
-                    ("url", json!({"type": "string", "description": "initial URL"})),
-                    ("profile", json!({"type": "string", "description": "persistent profile id; keeps cookies across calls"})),
-                    ("headed", json!({"type": "boolean", "description": "show window (default false)"})),
-                    ("stealth", json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"})),
-                    ("proxy", json!({"type": "string", "description": "proxy for this session, e.g. http://user:pass@host:port or socks5://host:port"})),
-                    ("proxies", json!({"type":"array","items":{"type":"string"},"description":"proxy rotation pool (2+ endpoints); rotate-proxy cycles them to escape IP-reputation walls"})),
-                    ("human_timing", json!({"type":"boolean","description":"inject randomized delays before input actions to mask robotic cadence"})),
+                    (
+                        "url",
+                        json!({"type": "string", "description": "initial URL"}),
+                    ),
+                    (
+                        "profile",
+                        json!({"type": "string", "description": "persistent profile id; keeps cookies across calls"}),
+                    ),
+                    (
+                        "headed",
+                        json!({"type": "boolean", "description": "show window (default false)"}),
+                    ),
+                    (
+                        "stealth",
+                        json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"}),
+                    ),
+                    (
+                        "proxy",
+                        json!({"type": "string", "description": "proxy for this session, e.g. http://user:pass@host:port or socks5://host:port"}),
+                    ),
+                    (
+                        "proxies",
+                        json!({"type":"array","items":{"type":"string"},"description":"proxy rotation pool (2+ endpoints); rotate-proxy cycles them to escape IP-reputation walls"}),
+                    ),
+                    (
+                        "human_timing",
+                        json!({"type":"boolean","description":"inject randomized delays before input actions to mask robotic cadence"}),
+                    ),
+                    (
+                        "backend",
+                        json!({"type":"string","enum":["cdp","dom"],"description":"engine backend: cdp (default, Chrome) or dom (experimental pure-Rust QuickJS, no Chrome process)"}),
+                    ),
                 ],
                 &[],
             ),
         ),
-        Tool::new("browser_sessions", "List live browser sessions.", schema(vec![], &[])),
+        Tool::new(
+            "browser_sessions",
+            "List live browser sessions.",
+            schema(vec![], &[]),
+        ),
         Tool::new(
             "browser_close",
             "Close a browser session and its browser process.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_rotate_proxy",
             "Re-launch the browser on the next proxy in the session's pool (open \
              with proxies=[a,b,…]). Honest IP-reputation rotation — NOT TLS \
              spoofing. Requires a pool of 2+ endpoints.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_navigate",
@@ -87,7 +120,10 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "browser_snapshot",
             "Accessibility snapshot with stable @eN refs. This is how you SEE the page.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_click",
@@ -159,6 +195,20 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             ),
         ),
         Tool::new(
+            "browser_find_element",
+            "Resolve a CSS selector to stable @eN refs the page exposes for click/fill/select (no intermediate snapshot needed). Example selector: `a[href*=\"iana\"]` or `form input[type=\"text\"]`.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    (
+                        "selector",
+                        json!({"type": "string", "description": "CSS selector (compound + descendant/child combinators + comma groups)"}),
+                    ),
+                ],
+                &["session", "selector"],
+            ),
+        ),
+        Tool::new(
             "browser_screenshot",
             "Capture a PNG screenshot of the page (vision fallback when the a11y tree has no refs).",
             schema(
@@ -184,7 +234,10 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "browser_webmcp_tools",
             "List tools the page declares via WebMCP (navigator.modelContext), if any.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_webmcp_invoke",
@@ -201,27 +254,42 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         Tool::new(
             "browser_extract",
             "Extract the page's readable main content as text (token-cheap reading; prefer over eval).",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_back",
             "Go back one history entry.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_forward",
             "Go forward one history entry.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_reload",
             "Reload the current document.",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_tabs",
             "List tabs of the session (active first).",
-            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+            schema(
+                vec![("session", json!({"type": "string", "description": SESSION}))],
+                &["session"],
+            ),
         ),
         Tool::new(
             "browser_new_tab",
@@ -352,18 +420,13 @@ impl VakMcp {
             // Transport-level panic that escaped the handler (UDS path only;
             // the in-process MCP path surfaces app errors as Ok(Error)).
             Err(err) => Err(McpError::internal_error(err, None)),
-            Ok(ResponsePayload::Error(e)) => {
-                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "{e}"
-                ))]))
-            }
+            Ok(ResponsePayload::Error(e)) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                format!("{e}"),
+            )])),
             // Vision fallback: hand the agent the raw pixels, not a placeholder
             // string, so screenshot-driven click_at loops actually work.
             Ok(ResponsePayload::Result(ActionResult::Image { png_base64 })) => Ok(
-                CallToolResult::success(vec![ContentBlock::image(
-                    png_base64.clone(),
-                    "image/png",
-                )]),
+                CallToolResult::success(vec![ContentBlock::image(png_base64.clone(), "image/png")]),
             ),
             Ok(payload) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 render_payload(&payload),
@@ -386,7 +449,9 @@ impl VakMcp {
                         .and_then(|v| v.as_bool())
                         .filter(|b| *b)
                         .map(|_| "mcp".to_string()),
-                    proxy: arg(args, "proxy").and_then(|v| v.as_str()).map(String::from),
+                    proxy: arg(args, "proxy")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     proxies: arg(args, "proxies")
                         .and_then(|v| v.as_array())
                         .map(|arr| {
@@ -398,6 +463,17 @@ impl VakMcp {
                     human_timing: arg(args, "human_timing")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
+                    backend: match arg(args, "backend").and_then(|v| v.as_str()) {
+                        None => None,
+                        Some("dom") => Some(vakbrowse_server::Backend::Dom),
+                        Some("cdp") => Some(vakbrowse_server::Backend::Cdp),
+                        Some(other) => {
+                            return Err(McpError::invalid_params(
+                                format!("unknown backend `{other}` (use cdp|dom)"),
+                                None,
+                            ));
+                        }
+                    },
                 },
             },
             "browser_close" => Request::Close {
@@ -455,6 +531,12 @@ impl VakMcp {
                 session: SessionId(arg_str(args, "session")?),
                 action: Action::EvalText {
                     expression: arg_str(args, "expression")?,
+                },
+            },
+            "browser_find_element" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::FindByCss {
+                    selector: arg_str(args, "selector")?,
                 },
             },
             "browser_screenshot" => Request::Act {
@@ -558,9 +640,12 @@ impl VakMcp {
                     session: SessionId(arg_str(args, "session")?),
                     actions,
                 }
-            },
+            }
             other => {
-                return Err(McpError::invalid_params(format!("unknown tool {other:?}"), None));
+                return Err(McpError::invalid_params(
+                    format!("unknown tool {other:?}"),
+                    None,
+                ));
             }
         };
         Ok(request)
@@ -610,12 +695,24 @@ fn fmt_action(a: &vakbrowse_server::ActionResult) -> String {
             vakbrowse_server::render::snapshot_text(snapshot)
         }
         vakbrowse_server::ActionResult::Text { text } => text.clone(),
+        vakbrowse_server::ActionResult::Elements { refs } => refs
+            .iter()
+            .map(|r| r.0.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
         vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
         vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
         vakbrowse_server::ActionResult::Cookies { cookies } => {
             serde_json::to_string_pretty(cookies).unwrap_or_else(|_| "[]".into())
         }
         vakbrowse_server::ActionResult::Done => "done".into(),
+        vakbrowse_server::ActionResult::Clicked { navigated, url } => {
+            if *navigated {
+                format!("navigated to {}", url.as_deref().unwrap_or(""))
+            } else {
+                "no navigation (possible bot wall / JS-handler click)".to_string()
+            }
+        }
         vakbrowse_server::ActionResult::Image { .. } => "(screenshot)".into(),
         vakbrowse_server::ActionResult::Tabs { tabs } => tabs
             .iter()
@@ -685,7 +782,10 @@ mod tests {
 
     #[test]
     fn tool_definitions_have_unique_names() {
-        let mut names: Vec<_> = tool_definitions().into_iter().map(|t| t.name.to_string()).collect();
+        let mut names: Vec<_> = tool_definitions()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
         names.sort();
         let len = names.len();
         names.dedup();

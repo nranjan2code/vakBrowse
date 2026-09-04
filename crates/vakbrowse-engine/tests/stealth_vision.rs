@@ -33,7 +33,10 @@ async fn stealth_patches_navigator_and_sets_identity() {
 
     session.navigate(&fixture_url("hello.html")).await.unwrap();
 
-    let webdriver = session.eval_text("String(navigator.webdriver)").await.unwrap();
+    let webdriver = session
+        .eval_text("String(navigator.webdriver)")
+        .await
+        .unwrap();
     assert_eq!(webdriver, "false", "navigator.webdriver must be patched");
 
     let platform = session.eval_text("navigator.platform").await.unwrap();
@@ -53,7 +56,10 @@ async fn without_stealth_webdriver_is_exposed() {
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
     session.navigate(&fixture_url("hello.html")).await.unwrap();
     // Sanity contrast: default launches don't pretend to be human.
-    let webdriver = session.eval_text("String(navigator.webdriver)").await.unwrap();
+    let webdriver = session
+        .eval_text("String(navigator.webdriver)")
+        .await
+        .unwrap();
     assert_eq!(webdriver, "true");
 }
 

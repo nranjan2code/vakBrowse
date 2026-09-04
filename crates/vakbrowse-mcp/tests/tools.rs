@@ -81,7 +81,10 @@ async fn full_agent_flow_through_mcp_tools() {
 
     // snapshot: agent's eyes
     let out = server
-        .tool_call("browser_snapshot", args(&[("session", json!(&session))]).as_ref())
+        .tool_call(
+            "browser_snapshot",
+            args(&[("session", json!(&session))]).as_ref(),
+        )
         .await
         .unwrap_or_else(|e| panic!("snapshot failed {e}"));
     let snap_text = text_of(out);
@@ -103,7 +106,11 @@ async fn full_agent_flow_through_mcp_tools() {
     for call in [
         (
             "browser_fill",
-            args(&[("session", json!(&session)), ("ref", json!(name_ref)), ("text", json!("Linus"))]),
+            args(&[
+                ("session", json!(&session)),
+                ("ref", json!(name_ref)),
+                ("text", json!("Linus")),
+            ]),
         ),
         (
             "browser_click",
@@ -121,14 +128,20 @@ async fn full_agent_flow_through_mcp_tools() {
             ]),
         ),
     ] {
-        let out = server.tool_call(call.0, call.1.as_ref()).await.expect(call.0);
+        let out = server
+            .tool_call(call.0, call.1.as_ref())
+            .await
+            .expect(call.0);
         let t = text_of(out);
         assert!(!t.starts_with("error"), "tool {} said: {}", call.0, t);
     }
 
     // close
     let out = server
-        .tool_call("browser_close", args(&[("session", json!(&session))]).as_ref())
+        .tool_call(
+            "browser_close",
+            args(&[("session", json!(&session))]).as_ref(),
+        )
         .await
         .unwrap();
     assert!(text_of(out).contains("closed"));
@@ -170,7 +183,10 @@ async fn batch_runs_actions_in_one_roundtrip() {
     let text = text_of(out);
     // Each result is prefixed with its 0-based index.
     assert!(text.contains("[0]"), "first result indexed: {text}");
-    assert!(text.contains("@e1"), "snapshot rendered in batch [0]: {text}");
+    assert!(
+        text.contains("@e1"),
+        "snapshot rendered in batch [0]: {text}"
+    );
     assert!(text.contains("[1] done"), "wait_url result indexed: {text}");
 
     // Fail-fast: a bad click ref surfaces as an error, not a partial list.
@@ -195,7 +211,10 @@ async fn batch_runs_actions_in_one_roundtrip() {
     );
 
     server
-        .tool_call("browser_close", args(&[("session", json!(&session))]).as_ref())
+        .tool_call(
+            "browser_close",
+            args(&[("session", json!(&session))]).as_ref(),
+        )
         .await
         .unwrap();
 }
@@ -203,10 +222,7 @@ async fn batch_runs_actions_in_one_roundtrip() {
 #[tokio::test]
 async fn unknown_tool_is_invalid_params() {
     let server = VakMcp::default();
-    let err = server
-        .tool_call("browser_fly", None)
-        .await
-        .err();
+    let err = server.tool_call("browser_fly", None).await.err();
     assert!(err.is_some(), "unknown tool must be rejected");
 }
 

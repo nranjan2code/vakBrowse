@@ -32,8 +32,7 @@ fn fixture_url(name: &str) -> String {
 async fn spawn_server() -> (SocketAddr, tempfile::TempDir) {
     // Isolated profiles root so tests never touch real user data.
     let dir = tempfile::tempdir().unwrap();
-    let manager =
-        SessionManager::default().with_profiles_root(dir.path().to_path_buf());
+    let manager = SessionManager::default().with_profiles_root(dir.path().to_path_buf());
     let app = vakbrowse_api::build_router(Arc::new(manager));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -51,7 +50,14 @@ async fn health_and_open_snapshot_close_over_http() {
     let client = reqwest::Client::new();
 
     assert_eq!(
-        client.get(format!("{base}/health")).send().await.unwrap().text().await.unwrap(),
+        client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
         "ok"
     );
 
@@ -134,7 +140,11 @@ async fn ws_bridge_roundtrip() {
     let text = serde_json::to_string(&reply).unwrap();
     assert!(text.contains("combobox"), "snapshot via ws: {text}");
 
-    send_ws_text(&mut ws, json!({ "type": "close", "session": session }).to_string()).await;
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "close", "session": session }).to_string(),
+    )
+    .await;
     let reply = recv_ws_text(&mut ws).await;
     assert_eq!(
         reply["Ok"]["Closed"],
@@ -159,10 +169,7 @@ async fn batch_actions_over_http() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 201);
-    let session = resp
-        .json::<Value>()
-        .await
-        .unwrap()["Ok"]["Opened"]["id"]
+    let session = resp.json::<Value>().await.unwrap()["Ok"]["Opened"]["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -179,11 +186,18 @@ async fn batch_actions_over_http() {
     assert_eq!(resp.status(), 200, "batch should succeed");
     let body = resp.json::<Value>().await.unwrap();
     let results = &body["Ok"]["Results"];
-    assert_eq!(results.as_array().expect("results array").len(), 2, "{body}");
+    assert_eq!(
+        results.as_array().expect("results array").len(),
+        2,
+        "{body}"
+    );
     let merged = serde_json::to_string(&body).unwrap();
     // [0] snapshot contains form inputs, [1] wait_url resolves to Done.
     assert!(merged.contains("textbox"), "[0] should snapshot: {merged}");
-    assert!(merged.contains("\"done\""), "[1] should be wait_url done: {merged}");
+    assert!(
+        merged.contains("\"done\""),
+        "[1] should be wait_url done: {merged}"
+    );
 
     client
         .delete(format!("{base}/sessions/{session}"))
@@ -230,13 +244,200 @@ async fn ws_batch_roundtrip() {
     let results = reply["Ok"]["Results"].as_array().expect("results array");
     assert_eq!(results.len(), 2, "batch via ws: {text}");
     assert!(text.contains("textbox"), "[0] snapshot over ws: {text}");
-    assert!(text.contains("\"done\""), "[1] wait_url done over ws: {text}");
+    assert!(
+        text.contains("\"done\""),
+        "[1] wait_url done over ws: {text}"
+    );
 
-    send_ws_text(&mut ws, json!({ "type": "close", "session": session }).to_string()).await;
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "close", "session": session }).to_string(),
+    )
+    .await;
     let _ = recv_ws_text(&mut ws).await;
 }
 
-// Minimal WS helpers without pulling tungstenite types into signatures.
+/// The `click` navigation signal survives the WS bridge: an anchor click that
+/// navigates returns `Result.Clicked { navigated:true, url }` over the wire.
+#[tokio::test]
+async fn click_signal_over_ws() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let (addr, _dir) = spawn_server().await;
+    let (mut ws, _) = tokio_tungstenite_connect(format!("ws://{addr}/ws")).await;
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "open", "options": { "url": fixture_url("links.html") } }).to_string(),
+    )
+    .await;
+    let session = recv_ws_text(&mut ws).await["Ok"]["Opened"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "act", "session": session, "action": { "type": "snapshot" } }).to_string(),
+    )
+    .await;
+    let snap = recv_ws_text(&mut ws).await;
+    let link_ref = snap["Ok"]["Result"]["snapshot"]["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["role"] == "link" && e["name"] == "Go to the form")
+        .and_then(|e| e["ref"].as_str())
+        .expect("navigating link ref")
+        .to_string();
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "act", "session": session, "action": { "type": "click", "ref": link_ref } }).to_string(),
+    )
+    .await;
+    let reply = recv_ws_text(&mut ws).await;
+    let text = serde_json::to_string(&reply).unwrap();
+    assert_eq!(
+        reply["Ok"]["Result"]["navigated"], true,
+        "click should navigate over ws: {text}"
+    );
+    assert!(
+        reply["Ok"]["Result"]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("form.html"),
+        "landed url: {text}"
+    );
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "close", "session": session }).to_string(),
+    )
+    .await;
+    let _ = recv_ws_text(&mut ws).await;
+}
+
+/// The `click` navigation signal survives the REST/HTTP boundary too.
+#[tokio::test]
+async fn click_navigates_over_http() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let (addr, _dir) = spawn_server().await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let session = client
+        .post(format!("{base}/sessions"))
+        .json(&json!({ "url": fixture_url("links.html") }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap()["Ok"]["Opened"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let snap_body = client
+        .post(format!("{base}/sessions/{session}/actions"))
+        .json(&json!({ "type": "snapshot" }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let elements = snap_body["Ok"]["Result"]["snapshot"]["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["role"] == "link" && e["name"] == "Go to the form")
+        .and_then(|e| e["ref"].as_str())
+        .expect("navigating link ref")
+        .to_string();
+
+    let body = client
+        .post(format!("{base}/sessions/{session}/actions"))
+        .json(&json!({ "type": "click", "ref": elements }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        body["Ok"]["Result"]["navigated"], true,
+        "click should navigate over http: {body}"
+    );
+    assert!(
+        body["Ok"]["Result"]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("form.html"),
+        "landed url: {body}"
+    );
+
+    client
+        .delete(format!("{base}/sessions/{session}"))
+        .send()
+        .await
+        .unwrap();
+}
+
+/// The new `Clicked` shape round-trips the WebSocket bridge for a non-navigating
+/// (javascript:) anchor too — `navigated:false`, over the wire.
+#[tokio::test]
+async fn click_no_navigation_over_ws() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let (addr, _dir) = spawn_server().await;
+    let (mut ws, _) = tokio_tungstenite_connect(format!("ws://{addr}/ws")).await;
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "open", "options": { "url": fixture_url("links.html") } }).to_string(),
+    )
+    .await;
+    let session = recv_ws_text(&mut ws).await["Ok"]["Opened"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "act", "session": session, "action": { "type": "snapshot" } }).to_string(),
+    )
+    .await;
+    let snap = recv_ws_text(&mut ws).await;
+    let link_ref = snap["Ok"]["Result"]["snapshot"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["role"] == "link" && e["name"] == "no-op link")
+        .and_then(|e| e["ref"].as_str())
+        .expect("no-op link ref")
+        .to_string();
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "act", "session": session, "action": { "type": "click", "ref": link_ref } }).to_string(),
+    )
+    .await;
+    let reply = recv_ws_text(&mut ws).await;
+    let text = serde_json::to_string(&reply).unwrap();
+    assert_eq!(reply["Ok"]["Result"]["navigated"], false, "{text}");
+    assert_eq!(
+        reply["Ok"]["Result"]["url"],
+        serde_json::Value::Null,
+        "{text}"
+    );
+
+    send_ws_text(
+        &mut ws,
+        json!({ "type": "close", "session": session }).to_string(),
+    )
+    .await;
+    let _ = recv_ws_text(&mut ws).await;
+}
 mod ws_util {
     use super::*;
 

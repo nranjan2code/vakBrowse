@@ -43,7 +43,11 @@ async fn navigates_local_fixture_and_reads_dom() {
     let snapshot = session.snapshot().await.expect("snapshot");
     assert!(snapshot.url.starts_with("file://"));
     // Perception now extracts real controls: the fixture has 1 link + 1 button.
-    assert_eq!(snapshot.elements.len(), 2, "expected link + button in snapshot");
+    assert_eq!(
+        snapshot.elements.len(),
+        2,
+        "expected link + button in snapshot"
+    );
     assert!(snapshot.elements.iter().any(|e| e.role == "link"));
     assert!(snapshot.elements.iter().any(|e| e.role == "button"));
 
@@ -59,12 +63,19 @@ async fn managed_engine_downloads_and_launches() {
     let artifact = vakbrowse_engine::cft::ensure_headless_shell(&launcher.cft)
         .await
         .expect("download/pin shell");
-    println!("artifact: {} @ {}", artifact.version, artifact.executable.display());
+    println!(
+        "artifact: {} @ {}",
+        artifact.version,
+        artifact.executable.display()
+    );
 
     let mut session = launcher
         .launch(&LaunchOptions::default())
         .await
         .expect("launch managed shell");
-    let nav = session.navigate("https://example.com").await.expect("live nav");
+    let nav = session
+        .navigate("https://example.com")
+        .await
+        .expect("live nav");
     assert!(nav.title.to_lowercase().contains("example"));
 }

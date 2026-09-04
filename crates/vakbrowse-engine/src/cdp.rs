@@ -6,24 +6,21 @@
 //! frames), prefixing AX node ids with the frame id so refs stay unique.
 
 use crate::cft::{self, CftConfig};
-use crate::{
-    EngineLauncher, LaunchOptions, Navigated, PageOps, validate_url,
-};
+use crate::{ClickResult, EngineLauncher, LaunchOptions, Navigated, PageOps, validate_url};
 use chromiumoxide::Page;
 use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::accessibility::{
-    AxNode, GetFullAxTreeParams,
-};
+use chromiumoxide::cdp::browser_protocol::accessibility::{AxNode, GetFullAxTreeParams};
 use chromiumoxide::cdp::browser_protocol::browser::{
     SetDownloadBehaviorBehavior, SetDownloadBehaviorParams,
 };
-use chromiumoxide::cdp::browser_protocol::dom::{BackendNodeId, GetBoxModelParams, ResolveNodeParams};
-use chromiumoxide::cdp::browser_protocol::input::{
-    DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams,
-    DispatchMouseEventType, MouseButton,
+use chromiumoxide::cdp::browser_protocol::dom::{
+    BackendNodeId, GetBoxModelParams, ResolveNodeParams,
 };
-use chromiumoxide::cdp::js_protocol::runtime::{CallArgument, CallFunctionOnParams};
 use chromiumoxide::cdp::browser_protocol::emulation::SetTimezoneOverrideParams;
+use chromiumoxide::cdp::browser_protocol::input::{
+    DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
+    MouseButton,
+};
 use chromiumoxide::cdp::browser_protocol::network::{
     ClearBrowserCookiesParams, CookieParam, GetCookiesParams, SetCookiesParams,
 };
@@ -31,6 +28,7 @@ use chromiumoxide::cdp::browser_protocol::page::{
     AddScriptToEvaluateOnNewDocumentParams, CaptureScreenshotFormat, CaptureScreenshotParams,
     FrameId, GetFrameTreeParams,
 };
+use chromiumoxide::cdp::js_protocol::runtime::{CallArgument, CallFunctionOnParams};
 use chromiumoxide::cdp::js_protocol::runtime::{EvaluateParams, RemoteObjectType};
 use chromiumoxide::handler::viewport::Viewport;
 use futures::StreamExt;
@@ -38,8 +36,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, WebMcpTool,
-    VakError,
+    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, VakError,
+    WebMcpTool,
 };
 
 use base64::Engine as _;
@@ -252,9 +250,7 @@ impl EngineLauncher for CdpLauncher {
                 if !is_sandbox_launch_failure(&msg) {
                     return Err(proto_err(e));
                 }
-                tracing::warn!(
-                    "sandboxed launch failed ({msg}); retrying with --no-sandbox"
-                );
+                tracing::warn!("sandboxed launch failed ({msg}); retrying with --no-sandbox");
                 let retry_config = builder
                     .arg("no-sandbox")
                     .arg("disable-setuid-sandbox")
@@ -375,12 +371,20 @@ impl CdpSession {
             .ok_or_else(|| VakError::NotFound(format!("no backing node for {r}")))
     }
 
-    fn flatten(prefix: &str, nodes: Vec<AxNode>) -> (Vec<vakbrowse_perception::FlatAxNode>, HashMap<String, BackendNodeId>) {
+    fn flatten(
+        prefix: &str,
+        nodes: Vec<AxNode>,
+    ) -> (
+        Vec<vakbrowse_perception::FlatAxNode>,
+        HashMap<String, BackendNodeId>,
+    ) {
         let mut flat = Vec::with_capacity(nodes.len());
         let mut backends = HashMap::new();
         for n in nodes {
             let id = format!("{prefix}{}", n.node_id.as_ref());
-            if !n.ignored && let Some(b) = n.backend_dom_node_id {
+            if !n.ignored
+                && let Some(b) = n.backend_dom_node_id
+            {
                 backends.insert(id.clone(), b);
             }
             let s = |v: Option<chromiumoxide::cdp::browser_protocol::accessibility::AxValue>| {
@@ -406,7 +410,12 @@ impl CdpSession {
 
     /// Collect flat AX nodes from every frame in the frame tree
     /// (root document first, then children depth-first).
-    async fn collect_frames(tab: &TabState) -> Result<(Vec<vakbrowse_perception::FlatAxNode>, HashMap<String, BackendNodeId>)> {
+    async fn collect_frames(
+        tab: &TabState,
+    ) -> Result<(
+        Vec<vakbrowse_perception::FlatAxNode>,
+        HashMap<String, BackendNodeId>,
+    )> {
         let page = &tab.page;
         let tree = page
             .execute(GetFrameTreeParams {})
@@ -430,7 +439,11 @@ impl CdpSession {
         let mut all_backends = HashMap::new();
         for (i, frame_id) in frame_ids.iter().enumerate() {
             let resp = match page
-                .execute(GetFullAxTreeParams::builder().frame_id(frame_id.clone()).build())
+                .execute(
+                    GetFullAxTreeParams::builder()
+                        .frame_id(frame_id.clone())
+                        .build(),
+                )
                 .await
             {
                 Ok(r) => r,
@@ -452,7 +465,11 @@ impl CdpSession {
     async fn box_center(&mut self, backend: BackendNodeId) -> Result<(f64, f64)> {
         let page = &self.tab().page;
         let resp = page
-            .execute(GetBoxModelParams::builder().backend_node_id(backend).build())
+            .execute(
+                GetBoxModelParams::builder()
+                    .backend_node_id(backend)
+                    .build(),
+            )
             .await
             .map_err(proto_err)?;
         let q = resp.result.model.content.inner();
@@ -467,7 +484,11 @@ impl CdpSession {
     async fn resolve_object_id(&mut self, backend: BackendNodeId) -> Result<String> {
         let page = &self.tab().page;
         let resp = page
-            .execute(ResolveNodeParams::builder().backend_node_id(backend).build())
+            .execute(
+                ResolveNodeParams::builder()
+                    .backend_node_id(backend)
+                    .build(),
+            )
             .await
             .map_err(proto_err)?;
         resp.result
@@ -525,8 +546,12 @@ impl CdpSession {
         let page = &self.tab().page;
         if self.stealth.is_some() {
             // Humanized: bezier path with eased steps instead of a teleport.
-            let path =
-                vakbrowse_stealth::mouse_path(self.pointer, (x, y), 0x5EED_u64.wrapping_add(x as u64), 18);
+            let path = vakbrowse_stealth::mouse_path(
+                self.pointer,
+                (x, y),
+                0x5EED_u64.wrapping_add(x as u64),
+                18,
+            );
             for (px, py) in path {
                 page.execute(dispatch(px, py).map_err(proto_err)?)
                     .await
@@ -546,16 +571,34 @@ impl CdpSession {
         const EXTRACT_JS: &str = r#"
 (() => {
   const MAX = 20000;
-  // Candidate containers scored by paragraph/text density.
+  // Candidate containers. Score = prose length discounted by link density:
+  // link-dense blocks (nav lists, sidebars, link walls) are chrome, not
+  // reading material, so a longer but link-heavy block must NOT win over a
+  // shorter genuine article.
   const candidates = Array.from(document.querySelectorAll(
-    'article, main, [role=main], .post, .entry-content, #content, #main'));
-  let root = candidates[0] || document.body;
+    'article, main, [role=main], .post, .entry-content, #content, #main,' +
+    '.articlebody, .pagecontent, section'));
+  const linkTextLen = (el) => {
+    let n = 0;
+    for (const a of (el.querySelectorAll ? el.querySelectorAll('a') : [])) {
+      n += (a.textContent || '').length;
+    }
+    return n;
+  };
+  const score = (el) => {
+    const txt = (el.innerText || '').length;
+    if (txt === 0) return 0;
+    const density = Math.min(1, linkTextLen(el) / txt);
+    return txt * (1 - density);
+  };
+  let root = document.body;
   let bestScore = -1;
-  const score = (el) => el.innerText.length;
   for (const c of candidates) {
     const s = score(c);
     if (s > bestScore) { bestScore = s; root = c; }
   }
+  // If no candidate has real prose (all link-chrome), root stays body — its
+  // chrome is stripped below, so link-lists/nav still don't leak.
   // Drop obvious chrome from the chosen root's copy.
   root = root.cloneNode(true);
   root.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,' +
@@ -646,10 +689,11 @@ impl CdpSession {
             }
             // Re-read URL too: reload/history may have landed elsewhere.
             if let Ok(Some(live)) = page.url().await
-                && live != url {
-                    url = live;
-                    self.tab_mut().current_url = url.clone();
-                }
+                && live != url
+            {
+                url = live;
+                self.tab_mut().current_url = url.clone();
+            }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         Ok(Navigated { url, title })
@@ -768,12 +812,43 @@ function() {
 }
 "#;
 
+/// Return the `href` of `this` only when it is a navigating anchor — i.e.
+/// `<a href=...>` whose href is neither empty, a pure fragment (`#...`), nor a
+/// `javascript:`/`mailto:`/`tel:` scheme. Everything else yields `""`, so the
+/// post-click navigation probe is skipped (no latency cost on non-anchor or
+/// non-navigating clicks).
+const NAVIGATING_ANCHOR_HREF_JS: &str = r#"
+function() {
+  if ((this.tagName || '').toUpperCase() !== 'A') return '';
+  const h = this.getAttribute('href');
+  if (!h) return '';
+  if (h.startsWith('#')) return '';
+  try { const u = new URL(h, location.href); if (['javascript:','mailto:','tel:'].includes(u.protocol)) return ''; }
+  catch { return ''; }
+  return h;
+}
+"#;
+
+/// How long a root-frame anchor click waits for the navigation it *should*
+/// have triggered before being reported as not-navigated. Only paid by
+/// navigating-anchor clicks; the bot-wall shape (Bing/DDG click the link but
+/// never fire a navigation) pays this once per recovery attempt. Tuned small
+/// so agent click loops don't stall on non-navigating anchors.
+const CLICK_NAV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+/// Per-attempt budget for the recovery fallbacks (DOM `.click()` then forced
+/// `location.href =`) before we give up on a bot-walled anchor click.
+const CLICK_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(600);
+
 #[async_trait::async_trait]
 impl PageOps for CdpSession {
     async fn navigate(&mut self, url: &str) -> Result<Navigated> {
         let validated = validate_url(url)?;
         self.maybe_human_jitter().await;
-        self.tab().page.goto(validated.as_str()).await.map_err(proto_err)?;
+        self.tab()
+            .page
+            .goto(validated.as_str())
+            .await
+            .map_err(proto_err)?;
 
         let state = self.tab_mut();
         state.current_url = validated.to_string();
@@ -869,14 +944,49 @@ impl PageOps for CdpSession {
         let title = self.title().await?;
         let url = self.tab().current_url.clone();
         let (flat, backends) = Self::collect_frames(self.tab()).await?;
-        let build = vakbrowse_perception::build_snapshot(&url, &title, &flat, &mut self.tab_mut().refs);
+        let build =
+            vakbrowse_perception::build_snapshot(&url, &title, &flat, &mut self.tab_mut().refs);
         let state = self.tab_mut();
         state.ref_to_ax = build.ref_to_ax;
         state.ax_to_backend = backends;
         Ok(build.snapshot)
     }
 
-    async fn click(&mut self, r: &ElementRef) -> Result<()> {
+    async fn find_by_css(&mut self, selector: &str) -> Result<Vec<ElementRef>> {
+        self.maybe_human_jitter().await;
+        // Snapshot has the side effect of populating `ref_to_ax` + `ax_to_backend`
+        // for the current document (and reconciling a click-driven navigation
+        // that bypassed navigate()). We reuse that map to turn querySelectorAll
+        // results into the SAME `@eN` refs `click`/`fill` resolve.
+        self.snapshot().await?;
+        // Invert ref→ax→backend into backend→ref so each matched DOM node can
+        // be looked up by its BackendNodeId.
+        let backend_to_ref = {
+            let tab = self.tab();
+            let mut m = HashMap::with_capacity(tab.ref_to_ax.len());
+            for (ref_, ax) in &tab.ref_to_ax {
+                if let Some(b) = tab.ax_to_backend.get(ax).copied() {
+                    m.insert(b, ref_.clone());
+                }
+            }
+            m
+        };
+        let page = &self.tab().page;
+        let elems = page.find_elements(selector).await.map_err(proto_err)?;
+        let mut out = Vec::with_capacity(elems.len());
+        for e in elems {
+            if let Some(r) = backend_to_ref.get(&e.backend_node_id) {
+                out.push(r.clone());
+            }
+        }
+        // `find_elements` returns root-document matches in DOM order, but the
+        // snapshot's `@eN` are numbered over the AX tree (interactive + non-
+        // ignored), so the two orderings can diverge. We return whatever refs
+        // resolve; agents index by ref, not position.
+        Ok(out)
+    }
+
+    async fn click(&mut self, r: &ElementRef) -> Result<ClickResult> {
         self.maybe_human_jitter().await;
         let ax_id = self
             .tab()
@@ -888,6 +998,14 @@ impl PageOps for CdpSession {
 
         // Root frame: trusted input at page-level coordinates.
         if ax_id.starts_with("f0:") {
+            // Classify the target *before* dispatching input: a navigation that
+            // the click triggers swaps the document and makes the resolved
+            // `backend` (a BackendNodeId) invalid, so we must read the href
+            // before the mouse events fire. Only `<a href>` with a real,
+            // cross-document href is expected to navigate — everything else
+            // (inputs, buttons, `javascript:`/fragment anchors) is treated as
+            // non-navigating and returns immediately.
+            let href = self.navigating_href(backend).await?;
             // Scroll the target into view first. DOM.getBoxModel returns
             // viewport-relative coords, so an element below the fold (e.g. a
             // Bing search result) would otherwise be clicked at a viewport
@@ -901,15 +1019,38 @@ impl PageOps for CdpSession {
                     vec![],
                 )
                 .await;
+            // Capture the URL *before* dispatching input: a navigation that
+            // the click triggers swaps the document (invalidating `backend`)
+            // and mutates the URL, so the before/after comparison is the only
+            // reliable signal — `wait_for_navigation`'s result is not (it can
+            // resolve spuriously on a non-navigating click).
+            let before = self
+                .tab()
+                .page
+                .url()
+                .await
+                .map_err(proto_err)?
+                .unwrap_or_default();
             let (cx, cy) = self.box_center(backend).await?;
-            return self.click_at(cx, cy).await;
+            self.click_at(cx, cy).await?;
+            // Surface whether an anchor click navigated. Snapshot also self-heals
+            // the URL on the next call, but reconciling now lets a following
+            // wait_url/extract see the new page immediately — and, crucially,
+            // lets the agent *observe* a silent bot wall (Bing/DDG accept the
+            // click but never fire a navigation). `href` is `Some` only for
+            // real `<a href>` anchors; everything else returns `stayed()` in O(1).
+            return if let Some(href) = href {
+                self.probe_click_navigation(backend, href, before).await
+            } else {
+                Ok(ClickResult::stayed())
+            };
         }
         // Child frames: DOM click on the resolved element.
         let ok = self
             .call_on_element(backend, FRAME_CLICK_JS, vec![])
             .await?;
         let _ = ok;
-        Ok(())
+        Ok(ClickResult::stayed())
     }
 
     async fn fill(&mut self, r: &ElementRef, text: &str) -> Result<()> {
@@ -1048,7 +1189,9 @@ impl PageOps for CdpSession {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(VakError::Timeout(format!("wait_for_url: {pattern} (href={href})")));
+                return Err(VakError::Timeout(format!(
+                    "wait_for_url: {pattern} (href={href})"
+                )));
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
@@ -1087,18 +1230,24 @@ impl PageOps for CdpSession {
             .secure(cookie.secure)
             .http_only(cookie.http_only);
         if let Some(ss) = &cookie.same_site {
-            builder = match ss.parse::<chromiumoxide::cdp::browser_protocol::network::CookieSameSite>() {
-                Ok(v) => builder.same_site(v),
-                Err(_) => {
-                    tracing::warn!(same_site = %ss, "unrecognized SameSite value; ignoring");
-                    builder
-                }
-            };
+            builder =
+                match ss.parse::<chromiumoxide::cdp::browser_protocol::network::CookieSameSite>() {
+                    Ok(v) => builder.same_site(v),
+                    Err(_) => {
+                        tracing::warn!(same_site = %ss, "unrecognized SameSite value; ignoring");
+                        builder
+                    }
+                };
         }
         let param = builder.build().map_err(proto_err)?;
         self.tab()
             .page
-            .execute(SetCookiesParams::builder().cookies(vec![param]).build().map_err(proto_err)?)
+            .execute(
+                SetCookiesParams::builder()
+                    .cookies(vec![param])
+                    .build()
+                    .map_err(proto_err)?,
+            )
             .await
             .map_err(proto_err)?;
         Ok(())
@@ -1191,7 +1340,11 @@ impl PageOps for CdpSession {
         // Arguments are parsed host-side so malformed JSON fails here, not in-page.
         let args: serde_json::Value = serde_json::from_str(arguments_json)
             .map_err(|e| VakError::Engine(format!("arguments_json: {e}")))?;
-        let args = if args.is_null() { serde_json::json!({}) } else { args };
+        let args = if args.is_null() {
+            serde_json::json!({})
+        } else {
+            args
+        };
 
         // The function is a fixed template; `name` and `args` are passed as
         // structured CDP call arguments (never interpolated into JS source),
@@ -1259,7 +1412,11 @@ impl PageOps for CdpSession {
         let id = TabId(format!("t{}", self.next_tab));
         self.next_tab += 1;
 
-        let page = self.browser.new_page("about:blank").await.map_err(proto_err)?;
+        let page = self
+            .browser
+            .new_page("about:blank")
+            .await
+            .map_err(proto_err)?;
         if let Some(stealth) = &self.stealth {
             apply_stealth(&page, stealth).await?;
         }
@@ -1274,7 +1431,11 @@ impl PageOps for CdpSession {
 
         if let Some(url) = url {
             let validated = validate_url(url)?;
-            state.page.goto(validated.as_str()).await.map_err(proto_err)?;
+            state
+                .page
+                .goto(validated.as_str())
+                .await
+                .map_err(proto_err)?;
             state.current_url = validated.to_string();
         }
 
@@ -1332,6 +1493,116 @@ fn human_jitter() -> std::time::Duration {
         .unwrap_or(0);
     let ms = 20 + (nanos % 130);
     std::time::Duration::from_millis(ms as u64)
+}
+
+impl CdpSession {
+    /// The `href` of `backend` iff it is a navigating anchor (`<a href>` whose
+    /// href is neither empty/fragment/`javascript:`/`mailto:`/`tel:`), else
+    /// `None`. Cheap and read-only — safe to call before input is dispatched
+    /// (calling it after a navigation swaps the document and invalidates the
+    /// BackendNodeId).
+    async fn navigating_href(&mut self, backend: BackendNodeId) -> Result<Option<String>> {
+        let href = self
+            .call_on_element(backend, NAVIGATING_ANCHOR_HREF_JS, vec![])
+            .await?;
+        match href {
+            serde_json::Value::String(s) if !s.is_empty() => Ok(Some(s)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Detect whether an anchor click navigated, escalating through progressively
+    /// less-synthetic navigation on a bot wall. The agent always gets a `url`
+    /// either way: `navigated:true` with the landed page, or `navigated:false`
+    /// (after recovery is exhausted) so the branch is explicit.
+    ///
+    /// Recovery ladder (each attempt re-checks for a URL change — the only
+    /// reliable signal; `wait_for_navigation` is ignored as it resolves
+    /// spuriously on non-navigations):
+    ///  1. the trusted mouse click already dispatched in `click`,
+    ///  2. a ground-truth DOM `element.click()`,
+    ///  3. a forced `location.href = <href>` assignment — the one move known to
+    ///     defeat Bing/DDG's click-blocking (they intercept trusted-input
+    ///     events but not a direct navigation assignment).
+    async fn probe_click_navigation(
+        &mut self,
+        backend: BackendNodeId,
+        href: String,
+        before: String,
+    ) -> Result<ClickResult> {
+        // 1. Trust the initial mouse click.
+        let page = self.tab().page.clone();
+        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_NAV_TIMEOUT).await {
+            return self.reconcile_click_navigation(url).await;
+        }
+
+        // 2. Ground-truth DOM click on the resolved element.
+        tracing::warn!(
+            "click on <a href={href}> produced no navigation within {:?}; escalating to DOM .click()",
+            CLICK_NAV_TIMEOUT
+        );
+        let _ = self.call_on_element(backend, FRAME_CLICK_JS, vec![]).await;
+        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_RETRY_TIMEOUT).await {
+            return self.reconcile_click_navigation(url).await;
+        }
+
+        // 3. Forced navigation: `location.href = <href>`. JSON-encodes the
+        // href into the expression so a page-controlled attribute value cannot
+        // inject JS (it is passed as a string literal, never interpolated raw).
+        let json_href = serde_json::to_string(&href)
+            .map_err(|e| VakError::Protocol(format!("can't encode href for nav: {e}")))?;
+        let expr = format!("location.href = {json_href};");
+        let _ = self
+            .tab()
+            .page
+            .evaluate(expr.as_str())
+            .await
+            .map_err(proto_err);
+        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_RETRY_TIMEOUT).await {
+            return self.reconcile_click_navigation(url).await;
+        }
+
+        // All three moves blocked (hard behavioral/TLS wall). Report honestly —
+        // the agent must rotate proxy/profile, not spin retrying.
+        tracing::warn!(
+            "click on <a href={href}> produced no navigation after mouse + DOM .click() + location.href (bot wall / JS handler)"
+        );
+        Ok(ClickResult::stayed())
+    }
+
+    /// Poll `page.url()` until it differs from `before` (and is non-empty) or
+    /// `budget` elapses. Returns the landed URL, if any.
+    async fn wait_url_change(
+        page: &Page,
+        before: &str,
+        budget: std::time::Duration,
+    ) -> Option<String> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            if let Ok(Some(after)) = page.url().await
+                && after != before
+            {
+                return Some(after);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Reconcile session state after an observed click-driven navigation:
+    /// adopt the live URL and start a fresh ref turn (refs map to a document).
+    async fn reconcile_click_navigation(&mut self, url: String) -> Result<ClickResult> {
+        let state = self.tab_mut();
+        state.current_url = url.clone();
+        state.refs.reset();
+        state.ref_to_ax.clear();
+        state.ax_to_backend.clear();
+        // A document change makes the last pointer position meaningless.
+        self.pointer = (0.0, 0.0);
+        Ok(ClickResult::navigated(url))
+    }
 }
 
 #[cfg(test)]

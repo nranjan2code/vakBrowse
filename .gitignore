@@ -2,3 +2,8 @@
 .DS_Store
 *.log
 *.profraw
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo

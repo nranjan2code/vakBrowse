@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Reading-density test</title>
+</head>
+<body>
+  <!-- Link-dense `.post` block: its <p><a> text is LONGER than the article,
+       so a naive innerText.length scorer picks this sidebar (chrome). -->
+  <div class="post">
+    <p><a href="/nav1">Navigation item one with enough words to be longer than the article by itself</a></p>
+    <p><a href="/nav2">Navigation item two with enough words to be longer than the article by itself</a></p>
+    <p><a href="/nav3">Navigation item three with enough words to be longer than the article by itself</a></p>
+  </div>
+
+  <!-- Real main content: short prose, zero link density. -->
+  <article>
+    <h1>Article heading</h1>
+    <p>Real main content the agent reads.</p>
+    <p>A second paragraph of genuine prose.</p>
+  </article>
+</body>
+</html>

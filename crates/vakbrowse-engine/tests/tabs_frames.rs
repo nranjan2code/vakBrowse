@@ -25,7 +25,10 @@ async fn tabs_open_switch_close_and_keep_separate_state() {
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
 
     session.navigate(&fixture_url("hello.html")).await.unwrap();
-    let new_tab = session.new_tab(Some(&fixture_url("form.html"))).await.unwrap();
+    let new_tab = session
+        .new_tab(Some(&fixture_url("form.html")))
+        .await
+        .unwrap();
 
     // New tab is active with its own document.
     assert!(session.snapshot().await.unwrap().title.contains("Form"));
@@ -67,7 +70,10 @@ async fn elements_inside_iframes_get_refs_and_click_through() {
         .cloned()
         .expect("button inside iframe visible in snapshot");
 
-    session.click(&jump.r#ref).await.expect("click inside iframe");
+    session
+        .click(&jump.r#ref)
+        .await
+        .expect("click inside iframe");
 
     // file:// iframes are unique-origin (no top navigation possible), so the
     // child signals success by mutating its own DOM — which surfaces in the

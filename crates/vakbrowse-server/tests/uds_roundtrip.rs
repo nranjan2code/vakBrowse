@@ -37,9 +37,14 @@ async fn wire_roundtrip_open_snapshot_close() {
     }
     assert!(socket.exists(), "socket never appeared");
 
-    let response = uds::call(&socket, Request::Open { options: Default::default() })
-        .await
-        .expect("call open");
+    let response = uds::call(
+        &socket,
+        Request::Open {
+            options: Default::default(),
+        },
+    )
+    .await
+    .expect("call open");
     let session = match response {
         Ok(ResponsePayload::Opened(info)) => info.id,
         other => panic!("unexpected {other:?}"),

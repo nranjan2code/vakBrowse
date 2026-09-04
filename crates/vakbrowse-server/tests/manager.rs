@@ -96,14 +96,91 @@ async fn open_navigate_snapshot_act() {
                 expression: "document.getElementById('out').textContent.includes('name=Grace')"
                     .into(),
                 timeout_ms: 3_000,
-            }
-            ,
+            },
         )
         .await
         .expect("wait");
 
     let closed = manager.handle(Request::Close { session }).await.unwrap();
     assert!(matches!(closed, ResponsePayload::Closed(true)));
+}
+
+#[tokio::test]
+async fn click_signals_navigation() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let manager = SessionManager::default();
+
+    let session = match manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("links.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap()
+    {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    let snap = match manager.act(&session, Action::Snapshot).await.unwrap() {
+        ActionResult::Snapshot { snapshot } => snapshot,
+        other => panic!("{other:?}"),
+    };
+    let nav_ref = snap
+        .elements
+        .iter()
+        .find(|e| e.role == "link" && e.name == "Go to the form")
+        .map(|e| e.r#ref.clone())
+        .unwrap();
+
+    // Click the *non-navigating* anchor first: its ref is still valid (no
+    // navigation has occurred yet).
+    let noop = snap
+        .elements
+        .iter()
+        .find(|e| e.role == "link" && e.name == "no-op link")
+        .map(|e| e.r#ref.clone())
+        .unwrap();
+    let noop_clicked = manager
+        .act(
+            &session,
+            Action::Click {
+                r#ref: noop.0.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    match noop_clicked {
+        ActionResult::Clicked {
+            navigated: false,
+            url: None,
+        } => {}
+        other => panic!("expected not-navigated Clicked, got {other:?}"),
+    }
+
+    // Now click the navigating anchor: it should report navigated + new URL.
+    let clicked = manager
+        .act(
+            &session,
+            Action::Click {
+                r#ref: nav_ref.0.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    match clicked {
+        ActionResult::Clicked {
+            navigated: true,
+            url,
+        } => {
+            assert!(url.unwrap().ends_with("form.html"));
+        }
+        other => panic!("expected navigated Clicked, got {other:?}"),
+    }
+
+    manager.handle(Request::Close { session }).await.unwrap();
 }
 
 #[tokio::test]
@@ -163,9 +240,7 @@ async fn persistent_profile_reuses_dir() {
         ResponsePayload::Opened(i) => i,
         other => panic!("{other:?}"),
     };
-    assert!(
-        std::path::Path::new(&root.path().join("agent-1")).is_dir()
-    );
+    assert!(std::path::Path::new(&root.path().join("agent-1")).is_dir());
     manager.close(&info.id).await.unwrap();
 }
 
@@ -173,8 +248,7 @@ async fn persistent_profile_reuses_dir() {
 async fn stealth_seed_patches_navigator_through_manager() {
     let _g = browser_lock().acquire().await.unwrap();
     use std::path::PathBuf;
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/hello.html");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/hello.html");
     let url = url::Url::from_file_path(path.canonicalize().unwrap())
         .unwrap()
         .to_string();
@@ -196,7 +270,12 @@ async fn stealth_seed_patches_navigator_through_manager() {
     };
     let _ = manager.act(&session, Action::Snapshot).await;
     let r = manager
-        .act(&session, Action::EvalText { expression: "String(navigator.webdriver)".into() })
+        .act(
+            &session,
+            Action::EvalText {
+                expression: "String(navigator.webdriver)".into(),
+            },
+        )
         .await
         .unwrap();
     assert!(
@@ -275,14 +354,20 @@ async fn rotate_proxy_relaunches_page() {
 
     // A post-rotation action must still succeed on the NEW page — and crucially
     // the session's URL must be restored (rotate re-navigated to the last url).
-    let snap = manager.act(&session, Action::Snapshot).await.expect("snapshot post-rotate");
+    let snap = manager
+        .act(&session, Action::Snapshot)
+        .await
+        .expect("snapshot post-rotate");
     match snap {
         ActionResult::Snapshot { snapshot } => {
             let has_name = snapshot
                 .elements
                 .iter()
                 .any(|e| e.role == "textbox" && e.name.contains("Name"));
-            assert!(has_name, "page must be restored after rotate, not about:blank");
+            assert!(
+                has_name,
+                "page must be restored after rotate, not about:blank"
+            );
         }
         other => panic!("expected snapshot, got {other:?}"),
     }
@@ -306,7 +391,9 @@ async fn rotate_proxy_without_pool_is_error() {
         ResponsePayload::Opened(info) => info.id,
         other => panic!("{other:?}"),
     };
-    let resp = manager.act(&session, Action::RotateProxy).await.unwrap_err();
+    let resp = manager
+        .act(&session, Action::RotateProxy)
+        .await
+        .unwrap_err();
     assert!(resp.to_string().contains("proxy pool"), "{resp}");
 }
-

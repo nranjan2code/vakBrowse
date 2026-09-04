@@ -8,8 +8,8 @@ pub use cdp::CdpLauncher;
 
 use std::path::{Path, PathBuf};
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, WebMcpTool,
-    VakError,
+    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, VakError,
+    WebMcpTool,
 };
 
 /// Everything needed to start a browser process.
@@ -66,11 +66,20 @@ pub trait PageOps: Send {
     /// Compact a11y snapshot with stable `@eN` refs. Refs stay valid across
     /// snapshots until the next navigation.
     async fn snapshot(&mut self) -> Result<Snapshot>;
-
+    /// CSS selector → stable `@eN` refs (clickable immediately). Backends that
+    /// cannot resolve selectors return `Unsupported`. The DOM backend walks
+    /// interactive elements; CDP will route through `querySelectorAll` + the
+    /// snapshot's ref numbering.
+    async fn find_by_css(&mut self, selector: &str) -> Result<Vec<ElementRef>> {
+        let _ = selector;
+        Err(VakError::Unsupported(
+            "this backend does not support CSS element resolution".into(),
+        ))
+    }
     /// Evaluate a JS expression and return its string result.
     async fn eval_text(&self, expression: &str) -> Result<String>;
 
-    async fn click(&mut self, r: &ElementRef) -> Result<()>;
+    async fn click(&mut self, r: &ElementRef) -> Result<ClickResult>;
     /// Set an input's value and fire input/change events (framework-safe).
     async fn fill(&mut self, r: &ElementRef, text: &str) -> Result<()>;
     /// Select an `<option>` by value on a combobox/listbox. Returns whether
@@ -121,6 +130,32 @@ pub trait PageOps: Send {
 pub struct Navigated {
     pub url: String,
     pub title: String,
+}
+
+/// Outcome of a `click`. A click that does not navigate (a non-navigating
+/// element, or a bot-wall / JS-handler anchor that the click failed to fire)
+/// reports `navigated:false` so the agent can branch instead of guessing.
+#[derive(Debug, Clone)]
+pub struct ClickResult {
+    /// Whether the click triggered a (same-process) navigation.
+    pub navigated: bool,
+    /// The post-click URL when `navigated` is true (the navigated-to page);
+    /// `None` otherwise.
+    pub url: Option<String>,
+}
+impl ClickResult {
+    pub fn navigated(url: String) -> Self {
+        Self {
+            navigated: true,
+            url: Some(url),
+        }
+    }
+    pub fn stayed() -> Self {
+        Self {
+            navigated: false,
+            url: None,
+        }
+    }
 }
 
 /// Factory for pages. Implemented by each backend and held by the session

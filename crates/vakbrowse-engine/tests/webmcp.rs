@@ -35,9 +35,6 @@ async fn webmcp_tools_listed_and_invokable() {
     assert!(out.contains("hello world"), "{out}");
 
     // Unknown tool surfaces as Unsupported, not a panic.
-    let err = session
-        .webmcp_invoke("nope", "{}")
-        .await
-        .unwrap_err();
+    let err = session.webmcp_invoke("nope", "{}").await.unwrap_err();
     assert!(matches!(err, vakbrowse_core::VakError::Unsupported(_)));
 }

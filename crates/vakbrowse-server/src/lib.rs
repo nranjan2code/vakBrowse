@@ -17,7 +17,20 @@ use vakbrowse_core::{
     Cookie, CookieInput, ElementRef, Extracted, ProfileId, Result, SessionId, Snapshot, TabId,
     TabInfo, VakError, WebMcpTool,
 };
+#[cfg(feature = "dom-backend")]
+use vakbrowse_dom::DomLauncher;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
+
+/// Which engine backend opens a session. Default = CDP (Chrome); `dom` selects
+/// the experimental pure-Rust QuickJS DOM backend (no Chrome process —
+/// `backend = "dom"` requires the `dom-backend` feature to be compiled in).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Cdp,
+    Dom,
+}
 
 /// Options for opening a new session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +43,12 @@ pub struct SessionOptions {
     pub headless: bool,
     #[serde(default)]
     pub url: Option<String>,
+    /// Engine backend: `"cdp"` (Chrome) or `"dom"` (experimental pure-Rust
+    /// QuickJS DOM backend, no Chrome). Requires the `dom-backend` feature on
+    /// the server crate. `None` => use the server's default (`VAKBROWSE_BACKEND`,
+    /// CDP unless overridden) so operators can run a chrome-free server.
+    #[serde(default)]
+    pub backend: Option<Backend>,
     /// When set, launch with a deterministic stealth fingerprint derived
     /// from this seed (defeats navigator.webdriver exposure, missing
     /// language/plugin data, robotic pointer teleports).
@@ -60,6 +79,7 @@ impl Default for SessionOptions {
             profile: None,
             headless: true,
             url: None,
+            backend: None,
             stealth_seed: None,
             proxy: None,
             proxies: Vec::new(),
@@ -79,26 +99,63 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
-    Navigate { url: String },
+    Navigate {
+        url: String,
+    },
     Snapshot,
-    Click { r#ref: String },
-    Fill { r#ref: String, text: String },
-    SelectOption { r#ref: String, value: String },
-    PressKey { key: String },
-    Scroll { dx: f64, dy: f64 },
-    EvalText { expression: String },
-    WaitForTruthy { expression: String, timeout_ms: u64 },
+    Click {
+        r#ref: String,
+    },
+    Fill {
+        r#ref: String,
+        text: String,
+    },
+    SelectOption {
+        r#ref: String,
+        value: String,
+    },
+    PressKey {
+        key: String,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
+    EvalText {
+        expression: String,
+    },
+    /// CSS selector → stable `@eN` refs against the current snapshot's element
+    /// set. Agents find a clickable handle without an intermediate snapshot.
+    FindByCss {
+        selector: String,
+    },
+    WaitForTruthy {
+        expression: String,
+        timeout_ms: u64,
+    },
     /// SPA-safe URL wait: poll `location.href` for a substring. Agents should
     /// use this instead of `wait_for_readyState`, which never fires on SPAs.
-    WaitForUrl { pattern: String, timeout_ms: u64 },
+    WaitForUrl {
+        pattern: String,
+        timeout_ms: u64,
+    },
     Cookies,
-    SetCookie { cookie: CookieInput },
+    SetCookie {
+        cookie: CookieInput,
+    },
     ClearCookies,
-    SetDownloadDir { dir: String },
+    SetDownloadDir {
+        dir: String,
+    },
     /// Vision fallback: PNG (base64 in the response).
-    Screenshot { full_page: bool },
+    Screenshot {
+        full_page: bool,
+    },
     /// Vision fallback: click raw viewport coordinates.
-    ClickAt { x: f64, y: f64 },
+    ClickAt {
+        x: f64,
+        y: f64,
+    },
     /// Rotate this session to the next proxy in its `SessionOptions.proxies`
     /// pool (re-launches the browser, preserves profile + stealth). The
     /// honest path around IP-reputation walls; requires a pool of 2+ endpoints.
@@ -106,7 +163,10 @@ pub enum Action {
     /// List tools the page declares via WebMCP (`navigator.modelContext`).
     WebMcpTools,
     /// Invoke a page-declared WebMCP tool.
-    WebMcpInvoke { name: String, arguments_json: String },
+    WebMcpInvoke {
+        name: String,
+        arguments_json: String,
+    },
 
     Back,
     Forward,
@@ -115,9 +175,15 @@ pub enum Action {
     Extract,
 
     Tabs,
-    NewTab { url: Option<String> },
-    SwitchTab { tab: TabId },
-    CloseTab { tab: TabId },
+    NewTab {
+        url: Option<String>,
+    },
+    SwitchTab {
+        tab: TabId,
+    },
+    CloseTab {
+        tab: TabId,
+    },
 }
 
 /// What an action produced. All variants are struct-style because
@@ -125,30 +191,73 @@ pub enum Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionResult {
-    Navigated { url: String, title: String },
-    Snapshot { snapshot: Snapshot },
-    Text { text: String },
-    Flag { ok: bool },
-    Cookies { cookies: Vec<Cookie> },
+    Navigated {
+        url: String,
+        title: String,
+    },
+    Snapshot {
+        snapshot: Snapshot,
+    },
+    Text {
+        text: String,
+    },
+    Flag {
+        ok: bool,
+    },
+    Cookies {
+        cookies: Vec<Cookie>,
+    },
     Done,
-    Image { png_base64: String },
-    Tools { tools: Vec<WebMcpTool> },
-    Tabs { tabs: Vec<TabInfo> },
-    TabOpened { tab: TabInfo },
+    /// `click` outcome. `navigated:true` means the click triggered a
+    /// (same-process) navigation and `url` is the landed page; `navigated:false`
+    /// means no navigation was observed in the probe window (non-navigating
+    /// element, JS-handler anchor, or a bot wall) — the agent can branch on
+    /// this instead of probing the URL itself.
+    Clicked {
+        navigated: bool,
+        url: Option<String>,
+    },
+    /// `find_by_css` result: stable `@eN` refs matching the selector, numbered
+    /// to match `snapshot`'s ordering (immediately clickable).
+    Elements {
+        refs: Vec<ElementRef>,
+    },
+    Image {
+        png_base64: String,
+    },
+    Tools {
+        tools: Vec<WebMcpTool>,
+    },
+    Tabs {
+        tabs: Vec<TabInfo>,
+    },
+    TabOpened {
+        tab: TabInfo,
+    },
 }
 
 /// Everything a surface can ask of the manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
-    Open { options: SessionOptions },
-    Close { session: SessionId },
+    Open {
+        options: SessionOptions,
+    },
+    Close {
+        session: SessionId,
+    },
     ListSessions,
-    Act { session: SessionId, action: Action },
+    Act {
+        session: SessionId,
+        action: Action,
+    },
     /// Run a sequence of actions in one round-trip (cuts agent latency:
     /// open+extract+close, fill+press+wait_url, etc., as one request).
     /// Fails fast on the first error so the agent sees which step broke.
-    Batch { session: SessionId, actions: Vec<Action> },
+    Batch {
+        session: SessionId,
+        actions: Vec<Action>,
+    },
 }
 
 /// Wire-level classification of an application error, preserving the
@@ -293,6 +402,13 @@ pub struct SessionManager {
     /// injects itself via `SessionManager::new(policy, launcher)`. The CDP
     /// shell remains the zero-argument convenience default.
     launcher: Arc<dyn EngineLauncher>,
+    /// Experimental DOM backend (QuickJS, no Chrome). `Some` only when the
+    /// `dom-backend` feature is compiled in; otherwise `Backend::Dom` opens
+    /// raise an explicit error so agents don't silently fall back to Chrome.
+    dom_launcher: Option<Arc<dyn EngineLauncher>>,
+    /// Server-wide default backend when a session's `options.backend` is `None`
+    /// (client omitted it). Operators set this via `VAKBROWSE_BACKEND`.
+    default_backend: Backend,
     policy: Policy,
     pool: PoolConfig,
     profiles_root: Option<PathBuf>,
@@ -310,6 +426,25 @@ fn default_launcher() -> Arc<dyn EngineLauncher> {
     Arc::new(CdpLauncher::default())
 }
 
+/// Select the launcher per-open request based on `SessionOptions.backend`.
+/// `Backend::Dom` needs the `dom-backend` feature; otherwise it fails loud (no
+/// silent Chrome fallback) so an agent knows its chrome-free session didn't
+/// get what it asked for.
+impl SessionManager {
+    fn launcher_for(&self, backend: &Backend) -> Result<&Arc<dyn EngineLauncher>> {
+        Ok(match backend {
+            Backend::Cdp => &self.launcher,
+            Backend::Dom => self.dom_launcher.as_ref().ok_or_else(|| {
+                VakError::Engine(
+                    "dom backend not compiled in; rebuild with --features \
+                     vakbrowse-server/dom-backend"
+                        .into(),
+                )
+            })?,
+        })
+    }
+}
+
 impl SessionManager {
     /// Construct with an explicit engine launcher (swap-in point for other
     /// backends). Use `SessionManager::default()` / `SessionManager::new(policy)`
@@ -318,6 +453,14 @@ impl SessionManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             launcher,
+            dom_launcher: {
+                #[cfg(feature = "dom-backend")]
+                let d: Option<Arc<dyn EngineLauncher>> = Some(Arc::new(DomLauncher));
+                #[cfg(not(feature = "dom-backend"))]
+                let d: Option<Arc<dyn EngineLauncher>> = None;
+                d
+            },
+            default_backend: Backend::Cdp,
             policy,
             pool: PoolConfig::default(),
             profiles_root: default_profiles_root(),
@@ -328,6 +471,15 @@ impl SessionManager {
     /// Convenience: `new` wired to the default CDP launcher.
     pub fn with_policy(policy: Policy) -> Self {
         Self::new(policy, default_launcher())
+    }
+
+    /// Convenience: `new` wired to the default CDP launcher AND a server-wide
+    /// default backend (used when a session omits `options.backend`). This is
+    /// the entry point for `vakd`/`vakd-rest` to honor `VAKBROWSE_BACKEND`.
+    pub fn with_policy_and_backend(policy: Policy, default_backend: Backend) -> Self {
+        let mut s = Self::new(policy, default_launcher());
+        s.default_backend = default_backend;
+        s
     }
 
     pub fn with_pool(mut self, pool: PoolConfig) -> Self {
@@ -350,8 +502,7 @@ impl SessionManager {
                     let map = this.sessions.lock().await;
                     map.values()
                         .filter(|s| {
-                            s.last_active.elapsed()
-                                > std::time::Duration::from_secs(timeout)
+                            s.last_active.elapsed() > std::time::Duration::from_secs(timeout)
                         })
                         .map(|s| s.id.clone())
                         .collect()
@@ -408,7 +559,11 @@ impl SessionManager {
                 .stealth_seed
                 .as_deref()
                 .map(vakbrowse_stealth::StealthProfile::generate),
-            proxy_server: options.proxies.first().cloned().or_else(|| options.proxy.clone()),
+            proxy_server: options
+                .proxies
+                .first()
+                .cloned()
+                .or_else(|| options.proxy.clone()),
             human_timing: options.human_timing,
             ..LaunchOptions::default()
         };
@@ -427,7 +582,11 @@ impl SessionManager {
             }
         }
 
-        let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
+        // Client may override per-session; otherwise fall back to the server's
+        // configured default (VAKBROWSE_BACKEND). `Backend::Dom` without the
+        // `dom-backend` feature fails loud in `launcher_for`.
+        let backend = options.backend.unwrap_or(self.default_backend);
+        let page: Box<dyn PageOps> = self.launcher_for(&backend)?.launch(&launch).await?;
         let id = self.next_session_id().await;
         let init_proxy_idx = if options.proxies.is_empty() {
             0
@@ -461,10 +620,7 @@ impl SessionManager {
             profile: options.profile.clone(),
             url: managed.current_url.clone(),
         };
-        self.sessions
-            .lock()
-            .await
-            .insert(info.id.clone(), managed);
+        self.sessions.lock().await.insert(info.id.clone(), managed);
 
         tracing::info!(session = %info.id, "session opened");
         Ok((info, navigated))
@@ -506,8 +662,7 @@ impl SessionManager {
         let n = pool.len();
         if n < 2 {
             return Err(VakError::Engine(
-                "RotateProxy needs a proxy pool of 2+ endpoints (open with proxies=[a,b,…])"
-                    .into(),
+                "RotateProxy needs a proxy pool of 2+ endpoints (open with proxies=[a,b,…])".into(),
             ));
         }
         let next = (idx + 1) % n;
@@ -596,18 +751,23 @@ impl SessionManager {
                     title: nav.title,
                 }
             }
-            Action::Snapshot => ActionResult::Snapshot { snapshot: page.snapshot().await? },
+            Action::Snapshot => ActionResult::Snapshot {
+                snapshot: page.snapshot().await?,
+            },
             Action::Click { r#ref } => {
-                page.click(&ElementRef(r#ref)).await?;
-                ActionResult::Done
+                let out = page.click(&ElementRef(r#ref)).await?;
+                ActionResult::Clicked {
+                    navigated: out.navigated,
+                    url: out.url,
+                }
             }
             Action::Fill { r#ref, text } => {
                 page.fill(&ElementRef(r#ref), &text).await?;
                 ActionResult::Done
             }
-            Action::SelectOption { r#ref, value } => {
-                ActionResult::Flag { ok: page.select_option(&ElementRef(r#ref), &value).await? }
-            }
+            Action::SelectOption { r#ref, value } => ActionResult::Flag {
+                ok: page.select_option(&ElementRef(r#ref), &value).await?,
+            },
             Action::PressKey { key } => {
                 page.press_key(&key).await?;
                 ActionResult::Done
@@ -616,9 +776,12 @@ impl SessionManager {
                 page.scroll(dx, dy).await?;
                 ActionResult::Done
             }
-            Action::EvalText { expression } => {
-                ActionResult::Text { text: page.eval_text(&expression).await? }
-            }
+            Action::EvalText { expression } => ActionResult::Text {
+                text: page.eval_text(&expression).await?,
+            },
+            Action::FindByCss { selector } => ActionResult::Elements {
+                refs: page.find_by_css(&selector).await?,
+            },
             Action::WaitForTruthy {
                 expression,
                 timeout_ms,
@@ -626,11 +789,16 @@ impl SessionManager {
                 page.wait_for_truthy(&expression, timeout_ms).await?;
                 ActionResult::Done
             }
-            Action::WaitForUrl { pattern, timeout_ms } => {
+            Action::WaitForUrl {
+                pattern,
+                timeout_ms,
+            } => {
                 page.wait_for_url(&pattern, timeout_ms).await?;
                 ActionResult::Done
             }
-            Action::Cookies => ActionResult::Cookies { cookies: page.cookies().await? },
+            Action::Cookies => ActionResult::Cookies {
+                cookies: page.cookies().await?,
+            },
             Action::SetCookie { cookie } => {
                 page.set_cookie(&cookie).await?;
                 ActionResult::Done
@@ -664,7 +832,9 @@ impl SessionManager {
                 text: page.webmcp_invoke(&name, &arguments_json).await?,
             },
 
-            Action::Tabs => ActionResult::Tabs { tabs: page.tabs().await? },
+            Action::Tabs => ActionResult::Tabs {
+                tabs: page.tabs().await?,
+            },
             Action::NewTab { url } => {
                 let tab = page.new_tab(url.as_deref()).await?;
                 // New tab becomes active; keep the session-level URL shadow
@@ -678,23 +848,36 @@ impl SessionManager {
                 page.switch_tab(&tab).await?;
                 ActionResult::Done
             }
-            Action::CloseTab { tab } => ActionResult::Flag { ok: page.close_tab(&tab).await? },
+            Action::CloseTab { tab } => ActionResult::Flag {
+                ok: page.close_tab(&tab).await?,
+            },
 
             Action::Back => {
                 let nav = page.back().await?;
-                ActionResult::Navigated { url: nav.url, title: nav.title }
+                ActionResult::Navigated {
+                    url: nav.url,
+                    title: nav.title,
+                }
             }
             Action::Forward => {
                 let nav = page.forward().await?;
-                ActionResult::Navigated { url: nav.url, title: nav.title }
+                ActionResult::Navigated {
+                    url: nav.url,
+                    title: nav.title,
+                }
             }
             Action::Extract => {
                 let ex: Extracted = page.extract().await?;
-                ActionResult::Text { text: format!("{}\n{}\n\n{}", ex.title, ex.url, ex.text) }
+                ActionResult::Text {
+                    text: format!("{}\n{}\n\n{}", ex.title, ex.url, ex.text),
+                }
             }
             Action::Reload => {
                 let nav = page.reload().await?;
-                ActionResult::Navigated { url: nav.url, title: nav.title }
+                ActionResult::Navigated {
+                    url: nav.url,
+                    title: nav.title,
+                }
             }
         };
 
@@ -767,7 +950,9 @@ mod types_tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Request = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, Request::Act { ref action, .. } if matches!(action, Action::Click { r#ref } if r#ref == "@e3")));
+        assert!(
+            matches!(back, Request::Act { ref action, .. } if matches!(action, Action::Click { r#ref } if r#ref == "@e3"))
+        );
     }
 
     #[test]
@@ -779,9 +964,14 @@ mod types_tests {
         let req = Request::Batch {
             session: SessionId::new("s7"),
             actions: vec![
-                Action::Click { r#ref: "@e3".into() },
+                Action::Click {
+                    r#ref: "@e3".into(),
+                },
                 Action::Snapshot,
-                Action::WaitForUrl { pattern: "ready".into(), timeout_ms: 1000 },
+                Action::WaitForUrl {
+                    pattern: "ready".into(),
+                    timeout_ms: 1000,
+                },
             ],
         };
         let json = serde_json::to_string(&req).unwrap();

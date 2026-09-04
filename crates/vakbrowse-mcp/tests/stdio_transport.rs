@@ -261,7 +261,8 @@ async fn drive_full_agent_flow(io: &mut McpStdio) {
     io.send(&notification("notifications/initialized")).await;
 
     // 3) tools/list
-    io.send(&request(2, "tools/list", serde_json::Map::new())).await;
+    io.send(&request(2, "tools/list", serde_json::Map::new()))
+        .await;
     let tools = io.recv_resp().await;
     assert_eq!(tools.get("error"), None, "tools/list error: {tools}");
     let names = tool_names(&tools);
@@ -293,7 +294,10 @@ async fn drive_full_agent_flow(io: &mut McpStdio) {
     io.send(&tool_call(4, "browser_snapshot", args)).await;
     let snap = io.recv_resp().await;
     let snap_txt = text_of(&snap);
-    assert!(snap_txt.contains("@e1"), "snapshot should expose @e1: {snap_txt}");
+    assert!(
+        snap_txt.contains("@e1"),
+        "snapshot should expose @e1: {snap_txt}"
+    );
     assert!(
         snap_txt.contains("Send") || snap_txt.contains("send") || snap_txt.contains("form"),
         "snapshot should reflect form fixture: {snap_txt}"

@@ -19,8 +19,9 @@ pub async fn serve(
     if let Some(parent) = socket_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let listener = UnixListener::bind(socket_path)
-        .map_err(|e| vakbrowse_core::VakError::Engine(format!("bind {}: {e}", socket_path.display())))?;
+    let listener = UnixListener::bind(socket_path).map_err(|e| {
+        vakbrowse_core::VakError::Engine(format!("bind {}: {e}", socket_path.display()))
+    })?;
     tracing::info!(socket = %socket_path.display(), "vakd listening");
 
     loop {
@@ -40,7 +41,10 @@ pub async fn serve(
     }
 }
 
-async fn handle_conn(stream: UnixStream, manager: std::sync::Arc<crate::SessionManager>) -> Result<()> {
+async fn handle_conn(
+    stream: UnixStream,
+    manager: std::sync::Arc<crate::SessionManager>,
+) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
@@ -52,7 +56,9 @@ async fn handle_conn(stream: UnixStream, manager: std::sync::Arc<crate::SessionM
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("bad request: {e}");
-                return Err(vakbrowse_core::VakError::Engine(format!("bad request: {e}")));
+                return Err(vakbrowse_core::VakError::Engine(format!(
+                    "bad request: {e}"
+                )));
             }
         };
         // A panicking handler must not take down the connection silently;

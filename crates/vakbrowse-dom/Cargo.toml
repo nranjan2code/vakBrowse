@@ -1,0 +1,21 @@
+[package]
+name = "vakbrowse-dom"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "Experimental headless-DOM (non-chromium) engine backend for vakBrowse"
+repository = "https://github.com/vak/vakBrowse"
+
+[lib]
+# Static lib is enough — the backend is swapped in via EngineLauncher trait
+# objects, never loaded as a dynamic plugin by this workspace.
+crate-type = ["rlib"]
+
+[dependencies]
+vakbrowse-core = { workspace = true }
+vakbrowse-engine = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1.92"
+quick-js = "0.4"

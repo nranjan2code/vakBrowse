@@ -12,8 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use vakbrowse_core::{Result, VakError};
 
-const LKG_MANIFEST: &str =
-    "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
+const LKG_MANIFEST: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
 const KNOWN_GOOD_MANIFEST: &str =
     "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json";
 
@@ -169,7 +168,10 @@ pub async fn ensure_headless_shell(config: &CftConfig) -> Result<CftArtifact> {
     }
 
     tracing::info!(%version, path = %executable.display(), "chrome-headless-shell ready");
-    Ok(CftArtifact { version, executable })
+    Ok(CftArtifact {
+        version,
+        executable,
+    })
 }
 
 async fn resolve_download_url(config: &CftConfig) -> Result<(String, String)> {
@@ -182,8 +184,8 @@ async fn resolve_download_url(config: &CftConfig) -> Result<(String, String)> {
         .await
         .map_err(|e| VakError::Engine(format!("manifest join: {e}")))??;
 
-    let manifest: Manifest =
-        serde_json::from_slice(&body).map_err(|e| VakError::Engine(format!("bad manifest: {e}")))?;
+    let manifest: Manifest = serde_json::from_slice(&body)
+        .map_err(|e| VakError::Engine(format!("bad manifest: {e}")))?;
 
     let entry = pick_entry(config, &manifest)?;
     let dl = entry
@@ -257,14 +259,15 @@ async fn download_and_extract(
     }
 
     let dest = root.join(version).join(platform);
-    tokio::fs::create_dir_all(&dest).await.map_err(VakError::from)?;
+    tokio::fs::create_dir_all(&dest)
+        .await
+        .map_err(VakError::from)?;
     let zip_path_extract = zip_path.clone();
     let dest_extract = dest.clone();
     // ZipArchive::extract is blocking I/O over a large tree; offload it so
     // the async executor stays responsive for other sessions.
     tokio::task::spawn_blocking(move || {
-        let file = std::fs::File::open(&zip_path_extract)
-            .map_err(VakError::from)?;
+        let file = std::fs::File::open(&zip_path_extract).map_err(VakError::from)?;
         let mut archive =
             zip::ZipArchive::new(file).map_err(|e| VakError::Engine(format!("bad zip: {e}")))?;
         archive

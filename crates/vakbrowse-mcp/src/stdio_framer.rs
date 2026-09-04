@@ -143,11 +143,17 @@ mod tests {
         let mut reader = BufReader::new(normalized);
         let mut l1 = Vec::new();
         reader.read_until(b'\n', &mut l1).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&l1).unwrap(), cl_msg);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&l1).unwrap(),
+            cl_msg
+        );
 
         let mut l2 = Vec::new();
         reader.read_until(b'\n', &mut l2).await.unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&l2).unwrap(), nd_msg);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&l2).unwrap(),
+            nd_msg
+        );
 
         // EOF on the normalized stream now.
         let mut end = Vec::new();

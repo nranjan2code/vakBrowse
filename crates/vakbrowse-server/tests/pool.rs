@@ -1,8 +1,6 @@
 //! Pool behavior: session cap enforcement and idle reaping.
 
-use vakbrowse_server::{
-    PoolConfig, Request, ResponsePayload, ServiceError, SessionManager,
-};
+use vakbrowse_server::{PoolConfig, Request, ResponsePayload, ServiceError, SessionManager};
 
 #[tokio::test]
 async fn max_sessions_cap_is_enforced() {

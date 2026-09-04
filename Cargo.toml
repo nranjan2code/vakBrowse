@@ -10,6 +10,7 @@ members = [
     "crates/vakbrowse-mcp",
     "crates/vakbrowse-api",
     "crates/vakbrowse-ffi",
+    "crates/vakbrowse-dom",
     "bins/vakd",
 ]
 
@@ -25,6 +26,7 @@ vakbrowse-stealth = { path = "crates/vakbrowse-stealth" }
 vakbrowse-perception = { path = "crates/vakbrowse-perception" }
 vakbrowse-engine = { path = "crates/vakbrowse-engine" }
 vakbrowse-server = { path = "crates/vakbrowse-server" }
+vakbrowse-dom = { path = "crates/vakbrowse-dom" }
 
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

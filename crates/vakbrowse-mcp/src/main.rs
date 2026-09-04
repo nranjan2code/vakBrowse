@@ -1,8 +1,8 @@
 //! Thin stdio wrapper around the vakbrowse-mcp library.
 
 use rmcp::ServiceExt;
-use vakbrowse_mcp::stdio_framer::normalize_stdin;
 use vakbrowse_mcp::VakMcp;
+use vakbrowse_mcp::stdio_framer::normalize_stdin;
 use vakbrowse_server::Policy;
 
 #[tokio::main]
@@ -11,8 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
 
@@ -33,9 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (stdin, stdout) = rmcp::transport::stdio();
     let framed_stdin = normalize_stdin(stdin);
 
-    let service = VakMcp::new(policy)
-        .serve((framed_stdin, stdout))
-        .await?;
+    let service = VakMcp::new(policy).serve((framed_stdin, stdout)).await?;
     service.waiting().await?;
     Ok(())
 }

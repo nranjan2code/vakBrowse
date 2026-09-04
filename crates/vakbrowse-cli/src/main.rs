@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand};
 use vakbrowse_core::SessionId;
-use vakbrowse_server::{
-    Action, Request, ResponsePayload, SessionOptions, uds,
-};
+use vakbrowse_server::{Action, Request, ResponsePayload, SessionOptions, uds};
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +43,11 @@ enum Command {
         /// timing isn't robotic (cadence-based behavioral tell).
         #[arg(long)]
         human_timing: bool,
+        /// Engine backend: `cdp` (Chrome) or `dom` (experimental pure-Rust
+        /// QuickJS backend, no Chrome process). Omit to use the daemon's default
+        /// (`VAKBROWSE_BACKEND`, CDP unless overridden).
+        #[arg(long)]
+        backend: Option<String>,
     },
     /// Close a session.
     Close { session: String },
@@ -80,6 +83,8 @@ enum Command {
     },
     /// Evaluate JS and print the string result.
     Eval { session: String, expression: String },
+    /// Resolve a CSS selector to stable `@eN` refs (clickable by `click`).
+    Find { session: String, selector: String },
     /// Wait until an expression becomes truthy.
     Wait {
         session: String,
@@ -123,7 +128,10 @@ enum Command {
     /// List tabs of a session (active first).
     Tabs { session: String },
     /// Open a new tab (becomes active).
-    NewTab { session: String, url: Option<String> },
+    NewTab {
+        session: String,
+        url: Option<String>,
+    },
     /// Switch the active tab.
     Switch { session: String, tab: String },
     /// Close a tab.
@@ -165,14 +173,29 @@ async fn main() {
 
 fn to_request(cmd: Command) -> Result<Request, String> {
     Ok(match cmd {
-        Command::Open { url, profile, headed, stealth, proxy, proxies, human_timing } => Request::Open {
+        Command::Open {
+            url,
+            profile,
+            headed,
+            stealth,
+            proxy,
+            proxies,
+            human_timing,
+            backend,
+        } => Request::Open {
             options: SessionOptions {
                 profile: profile.clone().map(vakbrowse_core::ProfileId::new),
                 headless: !headed,
                 url,
-                stealth_seed: stealth.then(|| {
-                    profile.unwrap_or_else(|| "default".to_string())
-                }),
+                backend: match backend.as_deref() {
+                    None => None,
+                    Some("cdp") => Some(vakbrowse_server::Backend::Cdp),
+                    Some("dom") => Some(vakbrowse_server::Backend::Dom),
+                    Some(other) => {
+                        return Err(format!("unrecognized backend `{other}` (use cdp|dom)"));
+                    }
+                },
+                stealth_seed: stealth.then(|| profile.unwrap_or_else(|| "default".to_string())),
                 proxy,
                 proxies,
                 human_timing,
@@ -185,28 +208,53 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         Command::Navigate { session, url } => act(session, Action::Navigate { url }),
         Command::Snapshot { session } => act(session, Action::Snapshot),
         Command::Click { session, r#ref } => act(session, Action::Click { r#ref }),
-        Command::Fill { session, r#ref, text } => act(session, Action::Fill { r#ref, text }),
-        Command::Select { session, r#ref, value } => {
-            act(session, Action::SelectOption { r#ref, value })
-        }
+        Command::Fill {
+            session,
+            r#ref,
+            text,
+        } => act(session, Action::Fill { r#ref, text }),
+        Command::Select {
+            session,
+            r#ref,
+            value,
+        } => act(session, Action::SelectOption { r#ref, value }),
         Command::Key { session, key } => act(session, Action::PressKey { key }),
         Command::Scroll { session, dx, dy } => act(session, Action::Scroll { dx, dy }),
-        Command::Eval { session, expression } => act(session, Action::EvalText { expression }),
-        Command::Wait { session, expression, timeout_ms } => act(
+        Command::Eval {
+            session,
+            expression,
+        } => act(session, Action::EvalText { expression }),
+        Command::Find { session, selector } => act(session, Action::FindByCss { selector }),
+        Command::Wait {
+            session,
+            expression,
+            timeout_ms,
+        } => act(
             session,
             Action::WaitForTruthy {
                 expression,
                 timeout_ms,
             },
         ),
-        Command::WaitUrl { session, pattern, timeout_ms } => act(
+        Command::WaitUrl {
             session,
-            Action::WaitForUrl { pattern, timeout_ms },
+            pattern,
+            timeout_ms,
+        } => act(
+            session,
+            Action::WaitForUrl {
+                pattern,
+                timeout_ms,
+            },
         ),
         Command::Shot { session, full } => act(session, Action::Screenshot { full_page: full }),
         Command::ClickAt { session, x, y } => act(session, Action::ClickAt { x, y }),
         Command::WebMcpTools { session } => act(session, Action::WebMcpTools),
-        Command::WebMcpInvoke { session, name, arguments_json } => act(
+        Command::WebMcpInvoke {
+            session,
+            name,
+            arguments_json,
+        } => act(
             session,
             Action::WebMcpInvoke {
                 name,
@@ -219,8 +267,18 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         Command::Extract { session } => act(session, Action::Extract),
         Command::Tabs { session } => act(session, Action::Tabs),
         Command::NewTab { session, url } => act(session, Action::NewTab { url }),
-        Command::Switch { session, tab } => act(session, Action::SwitchTab { tab: vakbrowse_core::TabId(tab) }),
-        Command::CloseTab { session, tab } => act(session, Action::CloseTab { tab: vakbrowse_core::TabId(tab) }),
+        Command::Switch { session, tab } => act(
+            session,
+            Action::SwitchTab {
+                tab: vakbrowse_core::TabId(tab),
+            },
+        ),
+        Command::CloseTab { session, tab } => act(
+            session,
+            Action::CloseTab {
+                tab: vakbrowse_core::TabId(tab),
+            },
+        ),
         Command::RotateProxy { session } => act(session, Action::RotateProxy),
         Command::Batch { session, actions } => {
             let acts: Vec<Action> = serde_json::from_str(&actions)
@@ -305,12 +363,16 @@ fn format_action_result(action: vakbrowse_server::ActionResult) -> String {
             vakbrowse_server::render::snapshot_text(&snapshot)
         }
         vakbrowse_server::ActionResult::Text { text } => text,
+        vakbrowse_server::ActionResult::Elements { refs } => refs
+            .iter()
+            .map(|r| r.0.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
         vakbrowse_server::ActionResult::Flag { ok: true } => "ok".into(),
         vakbrowse_server::ActionResult::Flag { ok: false } => "not applied".into(),
-        vakbrowse_server::ActionResult::Cookies { cookies } => serde_json::to_string_pretty(
-            &cookies,
-        )
-        .unwrap_or_else(|_| "[]".into()),
+        vakbrowse_server::ActionResult::Cookies { cookies } => {
+            serde_json::to_string_pretty(&cookies).unwrap_or_else(|_| "[]".into())
+        }
         vakbrowse_server::ActionResult::Tabs { tabs } => tabs
             .iter()
             .map(|t| format!("{}\t{}", t.id, t.url))
@@ -320,9 +382,14 @@ fn format_action_result(action: vakbrowse_server::ActionResult) -> String {
             format!("tab {} open ({})", tab.id, tab.url)
         }
         vakbrowse_server::ActionResult::Done => "done".into(),
-        vakbrowse_server::ActionResult::Image { png_base64 } => {
-            save_screenshot(&png_base64)
+        vakbrowse_server::ActionResult::Clicked { navigated, url } => {
+            if navigated {
+                format!("navigated to {}", url.as_deref().unwrap_or(""))
+            } else {
+                "no navigation (possible bot wall / JS-handler click)".into()
+            }
         }
+        vakbrowse_server::ActionResult::Image { png_base64 } => save_screenshot(&png_base64),
         vakbrowse_server::ActionResult::Tools { tools } => {
             if tools.is_empty() {
                 "(no WebMCP tools on this page)".into()

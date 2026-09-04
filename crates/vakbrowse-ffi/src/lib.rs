@@ -96,9 +96,9 @@ pub unsafe extern "C" fn vak_request(request_json: *const c_char) -> *mut c_char
 
     match CString::new(result) {
         Ok(s) => s.into_raw(),
-        Err(_) => CString::into_raw(
-            CString::new("{\"Err\":\"string contained NUL\"}").expect("literal"),
-        ),
+        Err(_) => {
+            CString::into_raw(CString::new("{\"Err\":\"string contained NUL\"}").expect("literal"))
+        }
     }
 }
 
@@ -127,7 +127,9 @@ mod tests {
         let req = CString::new(r#"{"type":"list_sessions"}"#).unwrap();
         let ptr = unsafe { vak_request(req.as_ptr()) };
         assert!(!ptr.is_null(), "vak_request returned a null pointer");
-        let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned();
+        let s = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
         unsafe { vak_string_free(ptr) };
         assert!(s.contains("Sessions"), "got: {s}");
     }

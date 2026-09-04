@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Blocked nav fixture</title>
+  </head>
+  <body>
+    <h1>blocked</h1>
+    <a href="form.html" id="b">click blocked</a>
+    <script>
+      // Simulate a bot wall: the click handler calls preventDefault(), so
+      // trusted-input dispatch (mouse events and DOM .click()) never navigate.
+      // Only a direct `location.href =` assignment bypasses it.
+      document.getElementById('b').addEventListener('click', function (e) { e.preventDefault(); });
+    </script>
+  </body>
+</html>

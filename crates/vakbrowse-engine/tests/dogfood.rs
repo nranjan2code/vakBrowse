@@ -33,7 +33,10 @@ async fn click_navigation_self_heals_snapshot_url_and_refs() {
     assert!(before.url.ends_with("form.html"));
 
     // Click-driven URL change (like a real link) — hash works on file://.
-    session.eval_text("location.hash = 'pushed'; location.hash").await.unwrap();
+    session
+        .eval_text("location.hash = 'pushed'; location.hash")
+        .await
+        .unwrap();
     let after = session.snapshot().await.unwrap();
     assert!(
         after.url.ends_with("#pushed"),

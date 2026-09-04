@@ -11,7 +11,9 @@ use axum::response::IntoResponse;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use vakbrowse_core::SessionId;
-use vakbrowse_server::{Policy, Request, Response, ResponsePayload, ServiceError, SessionManager};
+use vakbrowse_server::{
+    Backend, Policy, Request, Response, ResponsePayload, ServiceError, SessionManager,
+};
 
 #[derive(Clone)]
 struct ApiState {
@@ -23,19 +25,24 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/sessions", post(open_session).get(list_sessions))
-        .route(
-            "/sessions/{session}",
-            axum::routing::delete(close_session),
-        )
+        .route("/sessions/{session}", axum::routing::delete(close_session))
         .route("/sessions/{session}/actions", post(dispatch_action))
         .route("/sessions/{session}/batch", post(dispatch_batch))
         .route("/ws", any(ws_bridge))
         .with_state(state)
 }
 
-/// Serve forever on `addr`.
-pub async fn serve(addr: SocketAddr, policy: Policy) -> vakbrowse_core::Result<()> {
-    let app = build_router(Arc::new(SessionManager::with_policy(policy)));
+/// Serve forever on `addr`. `default_backend` is the server-wide engine chosen
+/// when a client omits `SessionOptions.backend` (`VAKBROWSE_BACKEND`).
+pub async fn serve(
+    addr: SocketAddr,
+    policy: Policy,
+    default_backend: Backend,
+) -> vakbrowse_core::Result<()> {
+    let app = build_router(Arc::new(SessionManager::with_policy_and_backend(
+        policy,
+        default_backend,
+    )));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| vakbrowse_core::VakError::Engine(format!("bind {addr}: {e}")))?;
@@ -149,9 +156,8 @@ async fn handle_ws(mut socket: WebSocket, state: ApiState) {
             Ok(request) => state.manager.handle(request).await,
             Err(e) => Err(format!("bad request: {e}")),
         };
-        let out = serde_json::to_string(&response).unwrap_or_else(|e| {
-            format!("{{\"Err\":\"encode failure: {e}\"}}")
-        });
+        let out = serde_json::to_string(&response)
+            .unwrap_or_else(|e| format!("{{\"Err\":\"encode failure: {e}\"}}"));
         if socket.send(Message::Text(out.into())).await.is_err() {
             break;
         }

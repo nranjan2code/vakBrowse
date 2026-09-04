@@ -24,9 +24,9 @@ if [[ "${1:-}" == "--uid" ]]; then
   mode="uid1000"; shift
   Uid="${1:?--uid needs a uid}"
 elif [[ "${1:-}" == "--mac" ]]; then
-  echo "=== mac: cargo test + clippy ==="
-  cargo test --workspace --no-fail-fast
-  cargo clippy --workspace --tests
+  echo "=== mac: cargo test + clippy (with dom-backend feature) ==="
+  cargo test --workspace --no-fail-fast --features vakbrowse-server/dom-backend
+  cargo clippy --workspace --tests --features vakbrowse-server/dom-backend
   exit 0
 fi
 
@@ -47,8 +47,8 @@ if [[ "$mode" == "root" ]]; then
     bash -c "set -e
       apt-get update -qq && apt-get install -y -qq $LIB_APTS >/dev/null 2>&1
       rustup component add clippy >/dev/null 2>&1 || true
-      cargo test --workspace --no-fail-fast
-      cargo clippy --workspace --tests"
+      cargo test --workspace --no-fail-fast --features vakbrowse-server/dom-backend
+      cargo clippy --workspace --tests --features vakbrowse-server/dom-backend"
 else
   # Non-root (mirrors the constrained-container CI that blocks the sandbox even
   # for unprivileged users): build as root, then hand off to a uid-N user.
@@ -60,5 +60,5 @@ else
       rustup component add clippy >/dev/null 2>&1 || true
       chmod -R 777 /usr/local/cargo /src/target
       useradd -m tester
-      su tester -c 'cd /src && cargo test --workspace --no-fail-fast && cargo clippy --workspace --tests'"
+      su tester -c 'cd /src && cargo test --workspace --no-fail-fast --features vakbrowse-server/dom-backend && cargo clippy --workspace --tests --features vakbrowse-server/dom-backend'"
 fi

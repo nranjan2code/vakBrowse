@@ -21,7 +21,10 @@ async fn extract_returns_clean_main_content() {
     let _g = common::browser_lock().acquire().await.unwrap();
     let launcher = CdpLauncher::default();
     let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
-    session.navigate(&fixture_url("article.html")).await.unwrap();
+    session
+        .navigate(&fixture_url("article.html"))
+        .await
+        .unwrap();
 
     let ex = session.extract().await.unwrap();
     assert_eq!(ex.title.trim(), "vakBrowse Article Fixture");
