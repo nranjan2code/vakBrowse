@@ -8,8 +8,8 @@ pub use cdp::CdpLauncher;
 
 use std::path::{Path, PathBuf};
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, VakError,
-    WebMcpTool,
+    Cookie, CookieInput, DownloadInfo, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo,
+    VakError, WebMcpTool,
 };
 
 /// Everything needed to start a browser process.
@@ -102,7 +102,7 @@ pub trait PageOps: Send {
     async fn cookies(&self) -> Result<Vec<Cookie>>;
     async fn set_cookie(&mut self, cookie: &CookieInput) -> Result<()>;
     async fn clear_cookies(&self) -> Result<()>;
-    async fn set_download_dir(&self, dir: &Path) -> Result<()>;
+    async fn set_download_dir(&mut self, dir: &Path) -> Result<()>;
 
     /// PNG bytes of the viewport (or full page when `full_page`).
     async fn screenshot(&self, full_page: bool) -> Result<Vec<u8>>;
@@ -124,6 +124,25 @@ pub trait PageOps: Send {
     /// Close a tab (the last remaining one cannot be closed). Returns
     /// whether it existed.
     async fn close_tab(&mut self, tab: &TabId) -> Result<bool>;
+
+    /// Set files on a file input element (`<input type=file>`). Uses
+    /// `DOM.setFileInputFiles` so browser security restrictions on
+    /// programmatic `.files` assignment are bypassed. Returns whether the
+    /// element was found. Backends without CDP return `Unsupported`.
+    async fn set_file_chooser(&mut self, r: &ElementRef, paths: &[String]) -> Result<bool> {
+        let _ = (r, paths);
+        Err(VakError::Unsupported(
+            "this backend does not support file chooser input".into(),
+        ))
+    }
+    /// Current page HTML source (`document.documentElement.outerHTML`).
+    async fn source(&self) -> Result<String>;
+    /// List completed downloads in the session's download directory.
+    async fn downloads(&mut self) -> Result<Vec<DownloadInfo>> {
+        Err(VakError::Unsupported(
+            "this backend does not support download listing".into(),
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]

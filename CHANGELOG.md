@@ -54,6 +54,29 @@ runs the mac/linux-root/linux-uid1000 gates, tags, and appends an entry.
   (`"no-element"`, `"wrong-tag:DIV"`, `"error:..."`) are now mapped to
   `VakError::NotFound` / `VakError::Unsupported` / `VakError::Engine`
   respectively, instead of a catch-all `Engine("diagnostic: …")` leak.
+- **File upload** (`Action::SetFileChooser` / `browser_set_file_chooser` /
+  `vak set-file-chooser`): sets files on a `<input type=file>` element by `@eN`
+  ref via CDP `DOM.setFileInputFiles` (bypasses browser security that blocks
+  programmatic `.files` assignment) + dispatches `input`/`change` events. DOM
+  backend returns `Unsupported`.
+- **Page HTML source** (`Action::Source` / `browser_source` / `vak source`):
+  returns `document.documentElement.outerHTML` — useful when the a11y snapshot
+  loses details (canvas, collapsed elements, CSP-gated content). DOM backend
+  serializes its in-memory tree.
+- **Download listing** (`Action::Downloads` / `browser_downloads` / `vak
+  downloads`): lists completed files in the session's download directory (path
+  + size). DOM backend returns `Unsupported`.
+- **Python SDK parity**: `vakbrowse.Session` now exposes the full action
+  surface — `find`, `shot`, `click_at`, `source`, `downloads`, `select_option`,
+  `set_file_chooser`, `cookies`, `set_cookie`, `clear_cookies`,
+  `set_download_dir`, `scroll`, `wait_truthy`, `back`/`forward`/`reload`,
+  `tabs`/`new_tab`/`switch_tab`/`close_tab`, `webmcp_tools`/`webmcp_invoke`.
+  `click` now returns navigation info (`{"type":"clicked",...}`), and `open`
+  accepts a `backend` parameter.
+- **Multi-session concurrency** (hermetic, DOM backend): two integration tests
+  (`dom_backend_multi_session_concurrency`,
+  `dom_backend_multi_session_batch_isolation`) spawn parallel DOM sessions and
+  prove snapshot ref isolation + batch isolation with zero chrome.
 
 ### Changed
 - **`vakbrowse-dom` parser hardened in-place**: quote-aware tag scanning (`>` in

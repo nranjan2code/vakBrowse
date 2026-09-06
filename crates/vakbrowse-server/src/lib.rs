@@ -3,6 +3,12 @@
 //! behavior is identical whether an agent embeds the manager in-process or
 //! talks to a running daemon over a socket.
 
+/// Hard cap on `Request::Batch` actions. Prevents a malicious or buggy
+/// client from OOM-ing the daemon with an arbitrarily large batch array.
+/// 500 is generous for agent loops (fill→press→wait→extract is ~4) while
+/// bounding memory for the `Vec::with_capacity` allocation.
+pub const MAX_BATCH_SIZE: usize = 500;
+
 pub mod render;
 #[cfg(unix)]
 pub mod uds;
@@ -160,7 +166,20 @@ pub enum Action {
     /// pool (re-launches the browser, preserves profile + stealth). The
     /// honest path around IP-reputation walls; requires a pool of 2+ endpoints.
     RotateProxy,
-    /// List tools the page declares via WebMCP (`navigator.modelContext`).
+    /// Set files on a `<input type=file>` element by @eN ref (bypasses
+    /// browser security that blocks programmatic file selection).
+    SetFileChooser {
+        r#ref: String,
+        paths: Vec<String>,
+    },
+    /// Current page HTML source (`document.documentElement.outerHTML`).
+    /// Useful for debugging when the a11y snapshot loses details (e.g.
+    /// collapsed <details>, canvas, or content behind CSP).
+    Source,
+    /// List completed downloads in the session's download directory.
+    /// Returns JSON: `[{path, bytes}, …]`.
+    Downloads,
+    /// List tools the page declares via WebMCP (`navigator.modelContext`), if any.
     WebMcpTools,
     /// Invoke a page-declared WebMCP tool.
     WebMcpInvoke {
@@ -893,6 +912,21 @@ impl SessionManager {
                     title: nav.title,
                 }
             }
+            Action::SetFileChooser { r#ref, paths } => {
+                let ok = page.set_file_chooser(&ElementRef::new(&r#ref), &paths).await?;
+                ActionResult::Flag { ok }
+            }
+            Action::Source => {
+                let text = page.source().await?;
+                ActionResult::Text { text }
+            }
+            Action::Downloads => {
+                let list = page.downloads().await?;
+                ActionResult::Text {
+                    text: serde_json::to_string(&list)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                }
+            }
         };
 
         if let ActionResult::Navigated { url, .. } = &result
@@ -925,6 +959,12 @@ impl SessionManager {
                 Err(e) => ResponsePayload::Error(e.into()),
             },
             Request::Batch { session, actions } => {
+                if actions.len() > MAX_BATCH_SIZE {
+                    return Ok(ResponsePayload::Error(ServiceError::Policy(format!(
+                        "batch exceeds max {MAX_BATCH_SIZE} actions (got {})",
+                        actions.len()
+                    ))));
+                }
                 let mut out = Vec::with_capacity(actions.len());
                 let mut failed: Option<VakError> = None;
                 for action in actions {
@@ -1005,6 +1045,25 @@ mod types_tests {
         }
         // The wire tag is "batch".
         assert!(json.contains("\"type\":\"batch\""));
+    }
+
+    #[tokio::test]
+    async fn batch_over_max_actions_is_policy_error() {
+        // The MAX_BATCH_SIZE guard fires before any session lookup or engine
+        // launch, so this is fully hermetic (no Chrome needed).
+        let manager = SessionManager::default();
+        let oversized = vec![Action::Snapshot; MAX_BATCH_SIZE + 1];
+        let resp = manager
+            .handle(Request::Batch {
+                session: SessionId::new("dummy"),
+                actions: oversized,
+            })
+            .await
+            .unwrap();
+        match resp {
+            ResponsePayload::Error(ServiceError::Policy(_)) => {}
+            other => panic!("expected Policy error for oversized batch, got {other:?}"),
+        }
     }
 
     #[test]

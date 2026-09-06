@@ -672,6 +672,72 @@ impl DomPage {
     }
 }
 
+impl DomPage {
+    /// Serialize a `Node` subtree to HTML string (for `source()`).
+    fn serialize_html(&self, node: &Node) -> String {
+        fn escape(s: &str) -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&#39;")
+        }
+        fn attr_str(n: &Node) -> String {
+            if n.attrs.is_empty() {
+                String::new()
+            } else {
+                let inner = n
+                    .attrs
+                    .iter()
+                    .map(|(k, v)| format!("{k}=\"{}\"", escape(v)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(" {inner}")
+            }
+        }
+        fn ser(n: &Node, out: &mut String) {
+            // Document-fragment node (empty tag, has children): recurse without
+            // emitting a wrapper tag.
+            if n.tag.is_empty() && !n.children.is_empty() {
+                for child in &n.children {
+                    ser(child, out);
+                }
+                return;
+            }
+            // Text node (empty tag, no children): emit escaped text.
+            if n.tag.is_empty() {
+                out.push_str(&escape(&n.text));
+                return;
+            }
+            let tag = n.tag.to_lowercase();
+            if RAW_TEXT.contains(&tag.as_str()) {
+                let children = n.children.iter().map(|c| c.text.clone()).collect::<String>();
+                out.push_str(&format!("<{tag}{}>", attr_str(n)));
+                out.push_str(&children);
+                out.push_str(&format!("</{tag}>"));
+                return;
+            }
+            out.push_str(&format!("<{tag}{}>", attr_str(n)));
+            if !is_void(&tag) {
+                let was_raw = RCDATA.contains(&tag.as_str());
+                if was_raw {
+                    if let Some(t) = n.children.first() {
+                        out.push_str(&escape(&t.text));
+                    }
+                } else {
+                    for child in &n.children {
+                        ser(child, out);
+                    }
+                }
+                out.push_str(&format!("</{tag}>"));
+            }
+        }
+        let mut out = String::new();
+        ser(node, &mut out);
+        out
+    }
+}
+
 #[async_trait::async_trait]
 impl PageOps for DomPage {
     async fn navigate(&mut self, url: &str) -> Result<Navigated> {
@@ -925,8 +991,11 @@ impl PageOps for DomPage {
         self.cookies.lock().unwrap().clear();
         Ok(())
     }
-    async fn set_download_dir(&self, _dir: &Path) -> Result<()> {
+    async fn set_download_dir(&mut self, _dir: &Path) -> Result<()> {
         Ok(())
+    }
+    async fn source(&self) -> Result<String> {
+        Ok(self.serialize_html(&self.doc.read().unwrap_or_else(|e| e.into_inner())))
     }
     async fn screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
         Err(VakError::Unsupported(

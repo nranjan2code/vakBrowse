@@ -79,3 +79,46 @@ def test_list_sessions_roundtrips(session):
     s, sid = session
     sessions = s.sessions()
     assert any(sid == info["id"] for info in sessions)
+
+
+def test_source_returns_html(session):
+    s, sid = session
+    src = s.source(sid)
+    assert "<html" in src.lower()
+    assert "</html>" in src.lower()
+    assert "Linus" not in src  # form not yet filled
+
+
+def test_click_returns_navigation_info(session):
+    s, sid = session
+    snap = s.snapshot(sid)
+    btn_ref = next(
+        e["ref"] for e in snap["elements"]
+        if e["role"] == "button" and "send" in e["name"].lower()
+    )
+    result = s.click(sid, btn_ref)
+    assert result["type"] == "clicked"
+    # JS handler prevents default → navigated:false on the form fixture.
+    assert "navigated" in result
+
+
+def test_find_by_css_returns_refs(session):
+    s, sid = session
+    # The form fixture has an input[type=text] and a button.
+    refs = s.find(sid, "input[type=text]")
+    assert len(refs) >= 1
+    assert all(r.startswith("@e") for r in refs)
+
+
+def test_eval_returns_stringified(session):
+    s, sid = session
+    val = s.eval(sid, "1 + 2")
+    assert val == "3"
+    flag = s.eval(sid, "navigator.webdriver")
+    assert flag == "false" or flag == "true"  # truthy or falsy, either is fine
+
+
+def test_downloads_returns_list(session):
+    s, sid = session
+    downloads = s.downloads(sid)
+    assert isinstance(downloads, list)

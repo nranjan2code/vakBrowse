@@ -104,6 +104,7 @@ class Session:
         human_timing: bool = False,
         profile: str | None = None,
         headed: bool = False,
+        backend: str | None = None,
     ) -> tuple[str, str]:
         """Open a session. Returns (session_id, initial_url)."""
         opts: dict = {"headless": not headed}
@@ -119,6 +120,8 @@ class Session:
             opts["proxies"] = list(proxies)
         if human_timing:
             opts["human_timing"] = True
+        if backend:
+            opts["backend"] = backend
         info = self._payload({"type": "open", "options": opts})["Opened"]
         return info["id"], info["url"]
 
@@ -140,23 +143,118 @@ class Session:
     def navigate(self, sid: str, url: str) -> dict:
         return self.act(sid, {"type": "navigate", "url": url})
 
-    def click(self, sid: str, ref: str) -> None:
-        self.act(sid, {"type": "click", "ref": ref})
+    def click(self, sid: str, ref: str) -> dict:
+        """Click an element by @eN ref. Returns ``{"type":"clicked","navigated":bool,"url":str|None}``."""
+        return self.act(sid, {"type": "click", "ref": ref})
 
     def fill(self, sid: str, ref: str, text: str) -> None:
         self.act(sid, {"type": "fill", "ref": ref, "text": text})
 
+    def select_option(self, sid: str, ref: str, value: str) -> bool:
+        """Select an `<option>` by value. Returns whether the selection took effect."""
+        return bool(self.act(sid, {"type": "select_option", "ref": ref, "value": value})["ok"])
+
+    def set_file_chooser(self, sid: str, ref: str, paths: list[str]) -> bool:
+        """Set files on a ``<input type=file>`` element (by @eN ref)."""
+        return bool(self.act(sid, {"type": "set_file_chooser", "ref": ref, "paths": paths})["ok"])
+
     def press_key(self, sid: str, key: str) -> None:
         self.act(sid, {"type": "press_key", "key": key})
 
+    def scroll(self, sid: str, dx: float, dy: float) -> None:
+        self.act(sid, {"type": "scroll", "dx": dx, "dy": dy})
+
+    def find(self, sid: str, selector: str) -> list[str]:
+        """Resolve a CSS selector to stable @eN refs (immediately clickable)."""
+        return self.act(sid, {"type": "find_by_css", "selector": selector})["elements"]["refs"]
+
+    def eval(self, sid: str, expression: str) -> str:
+        """Evaluate a JS expression; return its stringified value."""
+        return self.act(sid, {"type": "eval_text", "expression": expression})["text"]
+
+    def wait_truthy(self, sid: str, expression: str, timeout_ms: int = 5000) -> None:
+        """Poll a JS expression until truthy or timeout (raises VakError)."""
+        self.act(sid, {"type": "wait_for_truthy", "expression": expression, "timeout_ms": timeout_ms})
+
     def wait_url(self, sid: str, pattern: str, timeout_ms: int = 5000) -> bool:
+        """SPA-safe URL wait: poll location.href for a substring. Returns True on
+        match, False on timeout (no exception raised)."""
         try:
             self.act(sid, {"type": "wait_for_url", "pattern": pattern, "timeout_ms": timeout_ms})
+            return True
         except VakError:
             return False
-        return True
+
+    def shot(self, sid: str, full_page: bool = False) -> str:
+        """Take a screenshot. Returns base64-encoded PNG."""
+        return self.act(sid, {"type": "screenshot", "full_page": full_page})["png_base64"]
+
+    def click_at(self, sid: str, x: float, y: float) -> None:
+        """Click raw viewport coordinates (vision fallback)."""
+        self.act(sid, {"type": "click_at", "x": x, "y": y})
+
+    def source(self, sid: str) -> str:
+        """Return the current page HTML source."""
+        return self.act(sid, {"type": "source"})["text"]
+
+    def downloads(self, sid: str) -> list[dict]:
+        """List completed downloads in the session's download directory."""
+        text = self.act(sid, {"type": "downloads"})["text"]
+        return json.loads(text)
+
+    def cookies(self, sid: str) -> list[dict]:
+        """Get all cookies for the current page."""
+        return self.act(sid, {"type": "cookies"})["cookies"]
+
+    def set_cookie(self, sid: str, cookie: dict) -> None:
+        """Set a cookie. ``cookie`` has keys: name, value, domain, path,
+        secure (bool), http_only (bool), same_site ('Strict'|'Lax'|'None')."""
+        self.act(sid, {"type": "set_cookie", "cookie": cookie})
+
+    def clear_cookies(self, sid: str) -> None:
+        self.act(sid, {"type": "clear_cookies"})
+
+    def set_download_dir(self, sid: str, dir: str) -> None:
+        """Set the download directory for this session (must be set before download starts)."""
+        self.act(sid, {"type": "set_download_dir", "dir": dir})
+
+    def back(self, sid: str) -> dict:
+        return self.act(sid, {"type": "back"})
+
+    def forward(self, sid: str) -> dict:
+        return self.act(sid, {"type": "forward"})
+
+    def reload(self, sid: str) -> dict:
+        return self.act(sid, {"type": "reload"})
+
+    def tabs(self, sid: str) -> list[dict]:
+        """List tabs (active tab first)."""
+        return self.act(sid, {"type": "tabs"})["tabs"]
+
+    def new_tab(self, sid: str, url: str | None = None) -> dict:
+        """Open a new tab; it becomes active."""
+        action: dict = {"type": "new_tab"}
+        if url:
+            action["url"] = url
+        return self.act(sid, action)["tab"]
+
+    def switch_tab(self, sid: str, tab: str) -> None:
+        self.act(sid, {"type": "switch_tab", "tab": tab})
+
+    def close_tab(self, sid: str, tab: str) -> bool:
+        """Close a tab. The last remaining tab cannot be closed."""
+        return bool(self.act(sid, {"type": "close_tab", "tab": tab})["ok"])
+
+    def webmcp_tools(self, sid: str) -> list[dict]:
+        """List tools the page declares via WebMCP."""
+        return self.act(sid, {"type": "webmcp_tools"})["tools"]
+
+    def webmcp_invoke(self, sid: str, name: str, arguments_json: str = "{}") -> str:
+        """Invoke a page-declared WebMCP tool."""
+        return self.act(sid, {"type": "webmcp_invoke", "name": name, "arguments_json": arguments_json})["text"]
 
     def rotate_proxy(self, sid: str) -> bool:
+        """Rotate to the next proxy in the session's pool (re-launches browser)."""
         return bool(self.act(sid, {"type": "rotate_proxy"})["ok"])
 
     def close(self, sid: str) -> bool:

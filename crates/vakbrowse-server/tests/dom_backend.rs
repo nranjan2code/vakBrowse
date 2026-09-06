@@ -17,6 +17,7 @@ use vakbrowse_server::{
     Action, ActionResult, Policy, Request, ResponsePayload, ServiceError, SessionManager,
     SessionOptions,
 };
+use vakbrowse_core::VakError;
 
 fn fixture_url(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -438,6 +439,243 @@ async fn dom_backend_find_by_css_combinator_and_empty_semantics() {
         bad.is_err(),
         "unsupported selector must surface an error: {bad:?}"
     );
+}
+
+/// `source` returns the page HTML via the DOM backend (chrome-free).
+#[cfg(feature = "dom-backend")]
+#[tokio::test]
+async fn dom_backend_source_returns_html() {
+    let manager = SessionManager::with_policy_and_backend(Policy::default(), Backend::Dom);
+    let opened = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("links.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .expect("open");
+    let session = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    let source = manager
+        .act(&session, Action::Source)
+        .await
+        .expect("source");
+    match source {
+        ActionResult::Text { text } => {
+            assert!(
+                text.contains("<html") && text.contains("</html>"),
+                "source should contain full HTML document: {text}"
+            );
+            assert!(
+                text.contains("Go to the form"),
+                "source should contain link text from fixture: {text}"
+            );
+        }
+        other => panic!("expected Text, got {other:?}"),
+    }
+}
+
+/// `downloads` on the DOM backend returns `Unsupported` (no chrome = no download dir).
+#[tokio::test]
+async fn dom_backend_downloads_unsupported() {
+    let manager = dom_manager();
+    let opened = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("links.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .expect("open");
+    let session = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    let resp = manager.act(&session, Action::Downloads).await;
+    assert!(
+        matches!(resp, Err(VakError::Unsupported(_))),
+        "downloads on DOM backend should be Unsupported, got {resp:?}"
+    );
+}
+
+/// `set_file_chooser` on the DOM backend returns `Unsupported` (no CDP).
+#[tokio::test]
+async fn dom_backend_set_file_chooser_unsupported() {
+    let manager = dom_manager();
+    let opened = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("form.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .expect("open");
+    let session = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    let resp = manager
+        .act(
+            &session,
+            Action::SetFileChooser {
+                r#ref: "@e0".into(),
+                paths: vec!["/tmp/test.txt".into()],
+            },
+        )
+        .await;
+    assert!(
+        matches!(resp, Err(VakError::Unsupported(_))),
+        "set_file_chooser on DOM backend should be Unsupported, got {resp:?}"
+    );
+}
+
+/// Multi-session concurrency: spawn N DOM sessions in parallel, each
+/// independent, each producing its own snapshot ref numbering. Proves the
+/// session table is isolated no matter which backend is injected.
+#[tokio::test]
+async fn dom_backend_multi_session_concurrency() {
+    let manager = dom_manager();
+    let urls = [
+        fixture_url("form.html"),
+        fixture_url("links.html"),
+        fixture_url("links.html"),
+    ];
+
+    // Open all sessions concurrently.
+    let opens: Vec<_> = urls
+        .iter()
+        .map(|url| {
+            manager.handle(Request::Open {
+                options: SessionOptions {
+                    url: Some(url.clone()),
+                    ..SessionOptions::default()
+                },
+            })
+        })
+        .collect();
+    let results = futures::future::join_all(opens).await;
+
+    let mut session_ids = Vec::new();
+    for resp in results {
+        match resp.unwrap() {
+            ResponsePayload::Opened(info) => session_ids.push(info.id),
+            other => panic!("expected Opened, got {other:?}"),
+        }
+    }
+    assert_eq!(session_ids.len(), 3);
+
+    // Snapshot all concurrently — each must be independent.
+    let snaps: Vec<_> = session_ids
+        .iter()
+        .map(|sid| manager.act(sid, Action::Snapshot))
+        .collect();
+    let snap_results = futures::future::join_all(snaps).await;
+
+    for (i, result) in snap_results.iter().enumerate() {
+        let snap = result.as_ref().expect("snapshot {i}");
+        match snap {
+            ActionResult::Snapshot { snapshot } => {
+                // form.html has a button "Send application"; links.html has no form.
+                if i == 0 {
+                    assert!(
+                        snapshot.elements.iter().any(|e| e.role == "button"),
+                        "session 0 (form.html) should have a button"
+                    );
+                } else {
+                    assert!(
+                        !snapshot.elements.iter().any(|e| e.role == "button"),
+                        "session {i} (links.html) should NOT have a button"
+                    );
+                }
+            }
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    // Clean up all sessions.
+    for sid in &session_ids {
+        let _ = manager.handle(Request::Close { session: sid.clone() }).await;
+    }
+}
+
+/// Multi-session concurrency via batch: open two sessions, batch-navigate both
+/// in one round-trip each, verify they land on different pages.
+#[tokio::test]
+async fn dom_backend_multi_session_batch_isolation() {
+    let manager = dom_manager();
+    let form = fixture_url("form.html");
+    let links = fixture_url("links.html");
+
+    let s1_id = match manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(form),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap()
+        {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+    let s2_id = match manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(links),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap()
+        {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    // Run a batch on each session in parallel.
+    let b1 = manager.handle(Request::Batch {
+        session: s1_id.clone(),
+        actions: vec![Action::Snapshot, Action::Source],
+    });
+    let b2 = manager.handle(Request::Batch {
+        session: s2_id.clone(),
+        actions: vec![Action::Snapshot, Action::Source],
+    });
+    let (r1, r2) = futures::join!(b1, b2);
+
+    let r1 = match r1.unwrap() {
+        ResponsePayload::Results(v) => v,
+        other => panic!("expected Results s1, got {other:?}"),
+    };
+    let r2 = match r2.unwrap() {
+        ResponsePayload::Results(v) => v,
+        other => panic!("expected Results s2, got {other:?}"),
+    };
+    assert_eq!(r1.len(), 2);
+    assert_eq!(r2.len(), 2);
+
+    // s1 (form.html) source must contain "Adopt a pet"; s2 (links.html) must not.
+    match &r1[1] {
+        ActionResult::Text { text } => assert!(text.contains("Adopt"), "s1 source: {text}"),
+        other => panic!("expected Text, got {other:?}"),
+    }
+    match &r2[1] {
+        ActionResult::Text { text } => assert!(!text.contains("Adopt"), "s2 should not be form: {text}"),
+        other => panic!("expected Text, got {other:?}"),
+    }
+
+    // Clean up.
+    let _ = manager.handle(Request::Close { session: s1_id }).await;
+    let _ = manager.handle(Request::Close { session: s2_id }).await;
 }
 
 /// Cookie round-trip through the `DomLauncher` wire model: `Action::SetCookie`

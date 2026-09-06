@@ -137,8 +137,10 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **103 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
-  Linux-uid1000, clippy clean. New chrome-launching server tests are guarded by
+  count is now **115 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  Linux-uid1000, clippy clean (was 103; +12 from file-upload/source/downloads
+  actions and multi-session concurrency tests, all hermetic via the DOM backend).
+  New chrome-launching server tests are guarded by
   `browser_lock()` (serialized per test binary); the experimental `vakbrowse-dom`
   backend adds chrome-free coverage of the wire model (policy gate + Batch
   fail-fast surfacing a classified `ServiceError` kind) via
@@ -202,8 +204,9 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   28 browser_* (tabs, history, screenshot/click-at,
-                        #   extract, webmcp, wait_url, stealth/proxy on open);
+                        #   31 browser_* (tabs, history, screenshot/click-at,
+                        #   extract, webmcp, wait_url, stealth/proxy on open,
+                        #   set_file_chooser, source, downloads);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model
   vakbrowse-ffi         # cdylib C ABI (`vak_request(json) -> json`) w/ embedded

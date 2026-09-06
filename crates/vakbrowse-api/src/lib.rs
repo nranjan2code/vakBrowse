@@ -29,6 +29,9 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
         .route("/sessions/{session}/actions", post(dispatch_action))
         .route("/sessions/{session}/batch", post(dispatch_batch))
         .route("/ws", any(ws_bridge))
+        // Request body size is bounded by MAX_BATCH_SIZE in the
+        // SessionManager (checked before any action processing, covering all
+        // surfaces). See AGENTS.md for the full defense-in-depth rationale.
         .with_state(state)
 }
 
@@ -77,9 +80,20 @@ fn status_for(response: &Response) -> StatusCode {
             ServiceError::Policy(_) => StatusCode::FORBIDDEN,
             ServiceError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             ServiceError::Http(_) => StatusCode::BAD_GATEWAY,
-            // Engine/Protocol/Perception/Unsupported/Io are caller/action
-            // errors surfaced as 400 (no status-code granularity to give).
-            _ => StatusCode::BAD_REQUEST,
+            // Browser/engine-level failures (browser crashed, launch failed)
+            // are server-side and may warrant a client retry.
+            ServiceError::Engine(_) => StatusCode::BAD_GATEWAY,
+            // Protocol violations (CDP disconnect, malformed response) are
+            // transient and may also warrant a retry.
+            ServiceError::Protocol(_) => StatusCode::BAD_GATEWAY,
+            // Caller asked for something the backend can't do (no silent
+            // fallback — don't retry, fix the request).
+            ServiceError::Unsupported(_) => StatusCode::BAD_REQUEST,
+            // IO errors during perception/extraction are server-side.
+            ServiceError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            // Perception errors (snapshot parse failure, AX tree collapse)
+            // are server-side rendering issues.
+            ServiceError::Perception(_) => StatusCode::INTERNAL_SERVER_ERROR,
         },
         Ok(_) => StatusCode::OK,
         // Only reachable if the handler panics and is caught as a transport
@@ -173,5 +187,56 @@ async fn handle_ws(mut socket: WebSocket, state: ApiState) {
         if socket.send(Message::Text(out.into())).await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vakbrowse_server::ServiceError;
+
+    fn err(e: ServiceError) -> Response {
+        Ok(ResponsePayload::Error(e))
+    }
+
+    #[test]
+    fn status_codes_distinguish_retryable_from_not() {
+        // Stale ref -> 404 (don't retry, fix the ref).
+        assert_eq!(
+            status_for(&err(ServiceError::NotFound("stale".into()))),
+            StatusCode::NOT_FOUND
+        );
+        // Policy (URL allowlist) -> 403 (don't retry, fix the URL).
+        assert_eq!(
+            status_for(&err(ServiceError::Policy("blocked".into()))),
+            StatusCode::FORBIDDEN
+        );
+        // Timeout, browser crash, protocol error -> 502 (retryable).
+        assert_eq!(
+            status_for(&err(ServiceError::Timeout("t".into()))),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            status_for(&err(ServiceError::Engine("crashed".into()))),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            status_for(&err(ServiceError::Protocol("disconnected".into()))),
+            StatusCode::BAD_GATEWAY
+        );
+        // Unsupported action -> 400 (don't retry, use a different tool).
+        assert_eq!(
+            status_for(&err(ServiceError::Unsupported("no-js".into()))),
+            StatusCode::BAD_REQUEST
+        );
+        // Server-side rendering/IO issues -> 500.
+        assert_eq!(
+            status_for(&err(ServiceError::Io("disk".into()))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            status_for(&err(ServiceError::Perception("parse".into()))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

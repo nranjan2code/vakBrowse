@@ -14,7 +14,7 @@ use chromiumoxide::cdp::browser_protocol::browser::{
     SetDownloadBehaviorBehavior, SetDownloadBehaviorParams,
 };
 use chromiumoxide::cdp::browser_protocol::dom::{
-    BackendNodeId, GetBoxModelParams, ResolveNodeParams,
+    BackendNodeId, GetBoxModelParams, ResolveNodeParams, SetFileInputFilesParams,
 };
 use chromiumoxide::cdp::browser_protocol::emulation::SetTimezoneOverrideParams;
 use chromiumoxide::cdp::browser_protocol::input::{
@@ -36,8 +36,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo, VakError,
-    WebMcpTool,
+    Cookie, CookieInput, DownloadInfo, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo,
+    VakError, WebMcpTool,
 };
 
 use base64::Engine as _;
@@ -239,24 +239,41 @@ impl EngineLauncher for CdpLauncher {
         }
 
         let config = builder.clone().build().map_err(proto_err)?;
-        let launched = Browser::launch(config).await;
+        let launched = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Browser::launch(config),
+        )
+        .await;
         let (browser, mut handler) = match launched {
-            Ok(ok) => ok,
-            Err(e) => {
-                // Hardened environments (CI runners, Docker containers) often
-                // cannot run Chromium's setuid/userns sandbox at all. Retry
-                // once without the sandbox rather than failing the session.
-                let msg = e.to_string();
-                if !is_sandbox_launch_failure(&msg) {
-                    return Err(proto_err(e));
+            Ok(result) => match result {
+                Ok(ok) => ok,
+                Err(e) => {
+                    // Hardened environments (CI runners, Docker containers) often
+                    // cannot run Chromium's setuid/userns sandbox at all. Retry
+                    // once without the sandbox rather than failing the session.
+                    let msg = e.to_string();
+                    if !is_sandbox_launch_failure(&msg) {
+                        return Err(proto_err(e));
+                    }
+                    tracing::warn!("sandboxed launch failed ({msg}); retrying with --no-sandbox");
+                    let retry_config = builder
+                        .arg("no-sandbox")
+                        .arg("disable-setuid-sandbox")
+                        .build()
+                        .map_err(proto_err)?;
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        Browser::launch(retry_config),
+                    )
+                    .await
+                    .map_err(|_| VakError::Engine("browser launch timed out (30s)".into()))?
+                    .map_err(proto_err)?
                 }
-                tracing::warn!("sandboxed launch failed ({msg}); retrying with --no-sandbox");
-                let retry_config = builder
-                    .arg("no-sandbox")
-                    .arg("disable-setuid-sandbox")
-                    .build()
-                    .map_err(proto_err)?;
-                Browser::launch(retry_config).await.map_err(proto_err)?
+            },
+            Err(_) => {
+                return Err(VakError::Engine(
+                    "browser launch timed out (30s)".into(),
+                ));
             }
         };
 
@@ -293,6 +310,7 @@ impl EngineLauncher for CdpLauncher {
             stealth: options.stealth.clone(),
             pointer: (0.0, 0.0),
             human_timing: options.human_timing,
+            download_dir: None,
         }))
     }
 }
@@ -338,6 +356,17 @@ pub struct CdpSession {
     stealth: Option<vakbrowse_stealth::StealthProfile>,
     pointer: (f64, f64),
     human_timing: bool,
+    download_dir: Option<PathBuf>,
+}
+
+impl Drop for CdpSession {
+    fn drop(&mut self) {
+        // Abort the CDP event-handler task so it doesn't linger if the browser
+        // didn't close cleanly. If the handler already completed, this is a
+        // no-op. Panics inside the handler (caught by the spawn loop) won't
+        // prevent this — the JoinHandle is dropped after the abort.
+        self._handler_task.abort();
+    }
 }
 
 impl CdpSession {
@@ -840,6 +869,13 @@ const CLICK_NAV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1)
 /// `location.href =`) before we give up on a bot-walled anchor click.
 const CLICK_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(600);
 
+/// Dispatch input + change events on a file input after setting its files.
+const SET_FILES_EVENTS_JS: &str = r#"() => {
+    this.dispatchEvent(new Event('input', { bubbles: true }));
+    this.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+}"#;
+
 #[async_trait::async_trait]
 impl PageOps for CdpSession {
     async fn navigate(&mut self, url: &str) -> Result<Navigated> {
@@ -1290,7 +1326,8 @@ impl PageOps for CdpSession {
         Ok(())
     }
 
-    async fn set_download_dir(&self, dir: &Path) -> Result<()> {
+    async fn set_download_dir(&mut self, dir: &Path) -> Result<()> {
+        self.download_dir = Some(dir.to_path_buf());
         self.tab()
             .page
             .execute(
@@ -1508,6 +1545,62 @@ impl PageOps for CdpSession {
         tracing::info!(%tab, "tab closed");
         Ok(true)
     }
+
+    async fn set_file_chooser(&mut self, r: &ElementRef, paths: &[String]) -> Result<bool> {
+        let backend = match self.backend_for(r) {
+            Ok(b) => b,
+            Err(VakError::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        // DOM.setFileInputFiles bypasses browser security that would block
+        // assigning to <input type=file>.files directly. This works even
+        // when the element is in a detached/hidden state.
+        self.tab().page.execute(
+            SetFileInputFilesParams::builder()
+                .files(paths.to_vec())
+                .backend_node_id(backend)
+                .build()
+                .map_err(proto_err)?,
+        )
+        .await
+        .map_err(proto_err)?;
+        // Dispatch input + change events so framework listeners react.
+        self.call_on_element(backend, SET_FILES_EVENTS_JS, vec![])
+            .await?;
+        Ok(true)
+    }
+
+    async fn source(&self) -> Result<String> {
+        let html = self
+            .tab()
+            .page
+            .evaluate("document.documentElement.outerHTML")
+            .await
+            .map_err(proto_err)?;
+        let val: String = html.into_value().map_err(proto_err)?;
+        Ok(val)
+    }
+
+    async fn downloads(&mut self) -> Result<Vec<DownloadInfo>> {
+        let dir = match &self.download_dir {
+            Some(d) => d.clone(),
+            None => return Ok(Vec::new()),
+        };
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata()
+                    && meta.is_file()
+                {
+                    out.push(DownloadInfo {
+                        path: entry.path().to_string_lossy().to_string(),
+                        bytes: meta.len(),
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Wall-clock jitter in [20, 150] ms used by `human_timing` to break the
@@ -1542,7 +1635,7 @@ fn human_jitter() -> std::time::Duration {
     s ^= s >> 27;
     s = s.wrapping_mul(0x94d049bb133111eb);
     s ^= s >> 31;
-    let ms = 20 + (s % 131); // [20, 150]
+    let ms = 30 + (s % 171); // [30, 200]
     std::time::Duration::from_millis(ms)
 }
 
@@ -1661,9 +1754,24 @@ mod jitter_tests {
     use super::human_jitter;
     #[test]
     fn human_jitter_stays_in_band() {
-        for _ in 0..50 {
+        for _ in 0..100 {
             let ms = human_jitter().as_millis();
-            assert!((20..=150).contains(&ms), "jitter {ms}ms out of band");
+            assert!((30..=200).contains(&ms), "jitter {ms}ms out of band");
         }
+    }
+    #[test]
+    fn human_jitter_not_constant_under_load() {
+        // The splitmix64 mixer should produce diverse values even when called
+        // in a tight loop (the old `subsec_nanos % 130` would cycle
+        // predictably). Check that we see at least 5 distinct values in 50
+        // calls — a weak but hermetic signal of de-correlation.
+        let mut distinct = std::collections::HashSet::new();
+        for _ in 0..50 {
+            distinct.insert(human_jitter().as_millis());
+        }
+        assert!(
+            distinct.len() >= 5,
+            "jitter too uniform: only {distinct:?} distinct values in 50 calls"
+        );
     }
 }

@@ -81,6 +81,15 @@ pub struct Snapshot {
     pub elements: Vec<SnapshotNode>,
 }
 
+/// A completed download in the session's download directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadInfo {
+    /// Path to the downloaded file.
+    pub path: String,
+    /// File size in bytes at the time of the query.
+    pub bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotNode {
     pub r#ref: ElementRef,

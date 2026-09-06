@@ -380,6 +380,38 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                 &["session", "actions"],
             ),
         ),
+        Tool::new(
+            "browser_set_file_chooser",
+            "Set files on a file input element (by @eN ref) — bypasses browser \
+             security that blocks programmatic .files assignment.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("ref", json!({"type": "string", "description": "element ref like @e42"})),
+                    (
+                        "paths",
+                        json!({
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "absolute file paths to set"
+                        }),
+                    ),
+                ],
+                &["session", "ref", "paths"],
+            ),
+        ),
+        Tool::new(
+            "browser_source",
+            "Return the current page HTML source (document.documentElement.outerHTML). \
+             Useful when the a11y snapshot loses details (canvas, collapsed elements, \
+             content behind CSP).",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_downloads",
+            "List completed downloads in the session's download directory.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
     ]
 }
 
@@ -645,6 +677,37 @@ impl VakMcp {
                         .and_then(|v| v.as_u64())
                         .unwrap_or(5_000),
                 },
+            },
+            "browser_set_file_chooser" => {
+                let paths = arg(args, "paths")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        McpError::invalid_params("browser_set_file_chooser requires 'paths'", None)
+                    })?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>();
+                if paths.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "browser_set_file_chooser 'paths' must be non-empty".to_string(),
+                        None,
+                    ));
+                }
+                Request::Act {
+                    session: SessionId(arg_str(args, "session")?),
+                    action: Action::SetFileChooser {
+                        r#ref: arg_str(args, "ref")?,
+                        paths,
+                    },
+                }
+            }
+            "browser_source" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Source,
+            },
+            "browser_downloads" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Downloads,
             },
             "browser_batch" => {
                 let actions_val = arg(args, "actions").ok_or_else(|| {

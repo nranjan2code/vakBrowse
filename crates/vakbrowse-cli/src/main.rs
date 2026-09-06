@@ -140,6 +140,16 @@ enum Command {
     /// (open with --proxies a,b). Honest anti-bot rotation.
     #[command(visible_alias = "rotate_proxy")]
     RotateProxy { session: String },
+    /// Set files on a file input element (by @eN ref).
+    SetFileChooser {
+        session: String,
+        r#ref: String,
+        paths: Vec<String>,
+    },
+    /// Return the current page HTML source.
+    Source { session: String },
+    /// List completed downloads.
+    Downloads { session: String },
     /// Run a batch of actions in one request (fail-fast on first error).
     /// `actions` is a JSON array of action objects, e.g.:
     /// '[{"type":"navigate","url":"https://example.com"},{"type":"extract"}]'
@@ -280,6 +290,17 @@ fn to_request(cmd: Command) -> Result<Request, String> {
             },
         ),
         Command::RotateProxy { session } => act(session, Action::RotateProxy),
+        Command::SetFileChooser {
+            session, r#ref, paths,
+        } => act(
+            session,
+            Action::SetFileChooser {
+                r#ref,
+                paths,
+            },
+        ),
+        Command::Source { session } => act(session, Action::Source),
+        Command::Downloads { session } => act(session, Action::Downloads),
         Command::Batch { session, actions } => {
             let acts: Vec<Action> = serde_json::from_str(&actions)
                 .map_err(|e| format!("batch actions JSON parse error: {e}"))?;
