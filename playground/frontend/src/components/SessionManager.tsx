@@ -1,156 +1,253 @@
 import React, { useState } from 'react';
-import type { SessionId } from '../lib/types';
-
-interface SessionInfo {
-  id: string;
-  url: string;
-  profile: string | null;
-}
+import type { SessionInfo } from '../hooks/useSessions';
 
 interface Props {
   sessions: SessionInfo[];
   activeSession: string | null;
   onSelect: (sid: string) => void;
-  onOpen: (opts: Record<string, unknown>) => Promise<void>;
+  onOpen: (options: Record<string, unknown>) => Promise<void>;
   onClose: (sid: string) => Promise<void>;
   onList: () => void;
 }
 
-export function SessionManager({ sessions, activeSession, onSelect, onOpen, onClose, onList }: Props) {
-  return (
-    <div className="w-64 border-r border-border p-3 overflow-y-auto bg-card">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-medium text-text-dim uppercase">Sessions</h2>
-        <button
-          onClick={onList}
-          className="text-xs text-accent hover:text-accent-hover"
-          title="Refresh session list"
-        >
-          ↻
-        </button>
-      </div>
-
-      <OpenSessionForm onSubmit={onOpen} />
-
-      <div className="mt-3 space-y-1">
-        {sessions.map((s) => (
-          <SessionRow
-            key={s.id}
-            session={s}
-            active={s.id === activeSession}
-            onSelect={() => onSelect(s.id)}
-            onClose={() => onClose(s.id)}
-          />
-        ))}
-        {sessions.length === 0 && (
-          <p className="text-xs text-text-dim">No sessions. Open one above.</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SessionRow({
-  session, active, onSelect, onClose
-}: { session: SessionInfo; active: boolean; onSelect: () => void; onClose: () => void }) {
-  return (
-    <div
-      className={`
-        flex items-center justify-between p-2 rounded text-sm cursor-pointer
-        ${active ? 'bg-accent/20 border border-accent' : 'bg-bg border border-border hover:bg-card/70'}
-      `}
-      onClick={onSelect}
-    >
-      <div className="flex-1 min-w-0">
-        <span className="font-mono text-accent">{session.id}</span>
-        {session.profile && <span className="text-xs text-text-dim"> 📋</span>}
-        <p className="text-xs text-text-dim truncate">{session.url}</p>
-      </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-        className="ml-1 text-xs text-danger hover:text-red-400"
-        title="Close session"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-function OpenSessionForm({ onSubmit }: { onSubmit: (opts: Record<string, unknown>) => Promise<void> }) {
+export function SessionManager({
+  sessions,
+  activeSession,
+  onSelect,
+  onOpen,
+  onClose,
+  onList,
+}: Props) {
+  const [showModal, setShowModal] = useState(false);
   const [url, setUrl] = useState('https://example.com');
-  const [stealth, setStealth] = useState(false);
-  const [headed, setHeaded] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [proxy, setProxy] = useState('');
+  const [stealth, setStealth] = useState(true);
   const [backend, setBackend] = useState<'cdp' | 'dom'>('cdp');
+  const [proxy, setProxy] = useState('');
+  const [headed, setHeaded] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = () => {
-    const opts: Record<string, unknown> = {
-      url,
-      stealth,
-      headed,
-      backend,
-    };
-    if (proxy) opts.proxy = proxy;
-    onSubmit(opts);
-    // Reset
-    setUrl('https://example.com');
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const opts: Record<string, unknown> = {
+        url,
+        stealth,
+        backend,
+        headed,
+      };
+      if (proxy.trim()) {
+        opts.proxy = proxy.trim();
+      }
+      await onOpen(opts);
+      setShowModal(false);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="space-y-2">
-      <input
-        type="url"
-        placeholder="URL to open..."
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        className="w-full px-2 py-1 bg-bg border border-border rounded text-sm text-text"
-      />
-      <div className="flex gap-2">
-        <button onClick={handleSubmit} className="btn-primary flex-1">
-          Open
-        </button>
+    <div className="w-72 border-r border-border bg-card flex flex-col h-full font-mono text-xs select-none">
+      {/* Session Manager Header */}
+      <div className="p-3 border-b border-border bg-surface flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-accent" />
+          <span className="font-bold text-bone uppercase tracking-wider text-xs">
+            SESSION DECK
+          </span>
+        </div>
         <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="px-2 py-1 bg-border rounded text-xs"
-          title="Advanced options"
+          onClick={onList}
+          className="text-text-dim hover:text-text text-[11px] uppercase transition-colors"
+          title="Refresh active session list"
         >
-          ⚙
+          [SYNC]
         </button>
       </div>
 
-      {showAdvanced && (
-        <div className="space-y-1 text-xs">
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={stealth} onChange={(e) => setStealth(e.target.checked)} />
-            <span>Stealth</span>
-          </label>
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={headed} onChange={(e) => setHeaded(e.target.checked)} />
-            <span>Headed (visible window)</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <span>Backend:</span>
-            <select
-              value={backend}
-              onChange={(e) => setBackend(e.target.value as 'cdp' | 'dom')}
-              className="bg-bg border border-border rounded px-1 py-0.5 text-text"
-            >
-              <option value="cdp">CDP (Chrome)</option>
-              <option value="dom">DOM (pure Rust, no Chrome)</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-text-dim">Proxy:</span>
-            <input
-              type="text"
-              placeholder="socks5://host:port or http://host:port"
-              value={proxy}
-              onChange={(e) => setProxy(e.target.value)}
-              className="w-full px-1 py-0.5 bg-bg border border-border rounded text-text"
-            />
-          </label>
+      {/* Action button: Open Session */}
+      <div className="p-3 border-b border-border">
+        <button
+          onClick={() => setShowModal(true)}
+          className="btn-primary w-full py-2 flex items-center justify-center gap-1.5"
+        >
+          <span>+ NEW BROWSER NODE</span>
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+        {sessions.length === 0 ? (
+          <div className="p-4 text-center text-text-dim text-xs">
+            <div className="text-text-muted mb-1">NO ACTIVE SESSIONS</div>
+            <p className="text-[11px] leading-relaxed">
+              Launch a session or select a preset workflow to initialize an automation node.
+            </p>
+          </div>
+        ) : (
+          sessions.map((s) => {
+            const isSelected = s.id === activeSession;
+            return (
+              <div
+                key={s.id}
+                onClick={() => onSelect(s.id)}
+                className={`p-2.5 rounded-xs border cursor-pointer transition-all ${
+                  isSelected
+                    ? 'bg-surface-elevated border-accent shadow-xs'
+                    : 'bg-surface/50 border-border hover:border-border-strong hover:bg-surface'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`font-bold flex items-center gap-1.5 ${isSelected ? 'text-accent' : 'text-bone'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-accent' : 'bg-emerald-400'}`} />
+                    {s.id}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose(s.id);
+                    }}
+                    className="text-text-muted hover:text-danger text-[10px] uppercase font-bold px-1 transition-colors"
+                    title="Terminate session"
+                  >
+                    KILL ✕
+                  </button>
+                </div>
+                <div className="text-[11px] text-text-dim truncate font-sans">
+                  {s.url || '(empty)'}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Session Deck Status Footer */}
+      <div className="p-2.5 border-t border-border bg-surface text-[10px] text-text-muted flex justify-between">
+        <span>ENGINE: RUST CORE</span>
+        <span>ACTIVE: {sessions.length}</span>
+      </div>
+
+      {/* Open Session Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="te-panel rounded-xs border-accent p-5 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <span className="font-mono text-xs font-bold text-bone uppercase flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-accent" />
+                INITIALIZE BROWSER INSTANCE
+              </span>
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-text-dim hover:text-text text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              {/* URL input */}
+              <div className="space-y-1">
+                <label className="text-[11px] text-text-dim uppercase tracking-wider block">
+                  START TARGET URL:
+                </label>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  className="input-sm w-full font-mono"
+                  required
+                />
+              </div>
+
+              {/* Engine Backend Selection */}
+              <div className="space-y-1">
+                <label className="text-[11px] text-text-dim uppercase tracking-wider block">
+                  ENGINE BACKEND:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBackend('cdp')}
+                    className={`py-1.5 px-2 text-xs font-mono rounded-xs border transition-all ${
+                      backend === 'cdp'
+                        ? 'bg-accent/15 border-accent text-bone font-bold'
+                        : 'bg-surface border-border text-text-dim hover:text-text'
+                    }`}
+                  >
+                    CDP (CHROMIUM)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBackend('dom')}
+                    className={`py-1.5 px-2 text-xs font-mono rounded-xs border transition-all ${
+                      backend === 'dom'
+                        ? 'bg-accent/15 border-accent text-bone font-bold'
+                        : 'bg-surface border-border text-text-dim hover:text-text'
+                    }`}
+                  >
+                    DOM (QUICKJS / ZERO CHROME)
+                  </button>
+                </div>
+              </div>
+
+              {/* Toggles */}
+              <div className="grid grid-cols-2 gap-3 pt-1 font-mono text-xs">
+                <label className="flex items-center gap-2 cursor-pointer text-text-dim hover:text-text">
+                  <input
+                    type="checkbox"
+                    checked={stealth}
+                    onChange={(e) => setStealth(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  <span>STEALTH EVASIONS</span>
+                </label>
+
+                <label className="flex items-center gap-2 cursor-pointer text-text-dim hover:text-text">
+                  <input
+                    type="checkbox"
+                    checked={headed}
+                    onChange={(e) => setHeaded(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  <span>HEADED VIEWPORT</span>
+                </label>
+              </div>
+
+              {/* Proxy Input */}
+              <div className="space-y-1 pt-1">
+                <label className="text-[11px] text-text-dim uppercase tracking-wider block">
+                  OPTIONAL PROXY (HTTP / SOCKS5):
+                </label>
+                <input
+                  type="text"
+                  value={proxy}
+                  onChange={(e) => setProxy(e.target.value)}
+                  placeholder="http://proxy.example.com:8080"
+                  className="input-sm w-full font-mono text-xs"
+                />
+              </div>
+
+              {/* Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="btn-ghost"
+                >
+                  CANCEL
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="btn-primary"
+                >
+                  {loading ? 'LAUNCHING...' : 'SPAWN BROWSER NODE ›'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

@@ -45,9 +45,12 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
     #[cfg(feature = "playground")]
     {
         let app = app
+            .route("/", get(playground_root))
             .route("/playground", get(playground_root))
             .route("/playground/", get(playground_root))
-            .route("/playground/{*path}", get(playground_static));
+            .route("/playground/{*path}", get(playground_static))
+            .route("/assets/{*path}", get(playground_assets))
+            .fallback(get(playground_fallback));
         app.with_state(state)
     }
     #[cfg(not(feature = "playground"))]
@@ -258,6 +261,26 @@ async fn playground_static(
 ) -> AxResponse {
     let clean = relative.trim_start_matches("playground/");
     serve_static_file(clean)
+}
+
+/// Serve static assets requested from root, e.g. `/assets/...`
+#[cfg(feature = "playground")]
+async fn playground_assets(
+    _state: State<ApiState>,
+    Path(relative): Path<String>,
+) -> AxResponse {
+    let clean = format!("assets/{}", relative);
+    serve_static_file(&clean)
+}
+
+/// Fallback route: serve static file if it exists, otherwise SPA index.html
+#[cfg(feature = "playground")]
+async fn playground_fallback(
+    _state: State<ApiState>,
+    uri: axum::http::Uri,
+) -> AxResponse {
+    let path = uri.path().trim_start_matches('/');
+    serve_static_file(path)
 }
 
 #[cfg(feature = "playground")]

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import type { ElementRef, ActionResult } from '../lib/types';
 
-// Callback bridge — the parent SessionView wires these to the useSession hook.
 export interface ToolbarCallbacks {
   click: () => Promise<ActionResult | undefined>;
   fill: (text: string) => Promise<ActionResult | undefined>;
@@ -26,224 +25,295 @@ interface Props {
   loading: boolean;
   lastResult: ActionResult | null;
   onClear: () => void;
+  currentUrl?: string;
 }
 
-export function ActionToolbar({ selectedRef, selectedNode, cb, loading, lastResult, onClear }: Props) {
+export function ActionToolbar({
+  selectedRef,
+  selectedNode,
+  cb,
+  loading,
+  lastResult,
+  onClear,
+  currentUrl,
+}: Props) {
+  const [navUrl, setNavUrl] = useState(currentUrl || '');
+  const [fillText, setFillText] = useState('');
+  const [keyInput, setKeyInput] = useState('Enter');
+  const [evalExpr, setEvalExpr] = useState('navigator.webdriver');
+  const [cssSelector, setCssSelector] = useState('button, a');
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchJson, setBatchJson] = useState('[\n  {"type":"extract"}\n]');
+
+  const handleNavSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (navUrl.trim()) cb.navigate(navUrl.trim());
+  };
+
+  const handleFillSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (fillText) cb.fill(fillText);
+  };
+
+  const handleBatchSubmit = async () => {
+    try {
+      const parsed = JSON.parse(batchJson);
+      await cb.batch(parsed);
+      setBatchModalOpen(false);
+    } catch (err) {
+      alert('Invalid JSON in batch request');
+    }
+  };
+
   return (
-    <div className="border-b border-border p-3 bg-card space-y-2">
-      {/* Selection row */}
-      {selectedRef && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-accent font-mono">Selected: {selectedRef}</span>
-          <span className="text-text-dim">role={selectedNode?.role}</span>
-          {selectedNode?.name && <span className="text-text-dim">name="{selectedNode.name}"</span>}
+    <div className="border-b border-border bg-card p-3 space-y-3 font-mono text-xs select-none">
+      {/* Row 1: Hardware Navigation Bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <form onSubmit={handleNavSubmit} className="flex-1 min-w-[280px] flex items-center gap-1.5">
+          <span className="text-[11px] text-text-muted">URL:</span>
+          <input
+            type="text"
+            value={navUrl}
+            onChange={(e) => setNavUrl(e.target.value)}
+            placeholder="https://..."
+            className="input-sm flex-1 font-mono text-xs text-bone"
+            disabled={loading}
+          />
           <button
-            onClick={onClear}
-            className="px-2 py-0.5 bg-border hover:bg-accent/20 rounded text-xs"
+            type="submit"
+            disabled={loading || !navUrl}
+            className="btn-primary"
+            title="Navigate to URL"
           >
-            Clear
+            NAVIGATE ›
+          </button>
+        </form>
+
+        {/* Core Perception Actions */}
+        <div className="flex items-center gap-1.5 border-l border-border pl-2">
+          <button
+            onClick={() => cb.extract()}
+            disabled={loading}
+            className="btn-success"
+            title="Extract readability main-content text"
+          >
+            EXTRACT TEXT
+          </button>
+          <button
+            onClick={() => cb.screenshot()}
+            disabled={loading}
+            className="btn-secondary"
+            title="Capture PNG screenshot"
+          >
+            SCREENSHOT
+          </button>
+          <button
+            onClick={() => cb.source()}
+            disabled={loading}
+            className="btn-ghost"
+            title="Inspect raw HTML source"
+          >
+            SOURCE
           </button>
         </div>
-      )}
-
-      {/* Primary actions row */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <button
-          onClick={cb.click}
-          disabled={loading || !selectedRef}
-          className="btn-primary"
-          title="Click the selected element"
-        >
-          Click
-        </button>
-
-        <FillField disabled={loading || !selectedRef} onSubmit={cb.fill} />
-        <SelectField disabled={loading || !selectedRef} onSubmit={cb.selectOption} />
-        <PressKeyField disabled={loading} onSubmit={cb.pressKey} />
-        <CssField disabled={loading} onSubmit={cb.findCss} />
-        <EvalField disabled={loading} onSubmit={cb.evalText} />
-
-        <div className="border-l border-border h-6 mx-2" />
-
-        <button onClick={cb.extract} disabled={loading} className="btn-success" title="Extract readable content">
-          Extract
-        </button>
-        <button onClick={cb.source} disabled={loading} className="btn-ghost" title="View page HTML source">
-          Source
-        </button>
-        <button onClick={cb.screenshot} disabled={loading} className="btn-ghost" title="Take screenshot">
-          Screenshot
-        </button>
-        <FileInputField disabled={loading || !selectedRef} onSubmit={cb.setFileChooser} />
-
-        <div className="border-l border-border h-6 mx-2" />
-
-        <NavigateField disabled={loading} onSubmit={cb.navigate} />
-        <button onClick={cb.cookies} disabled={loading} className="btn-ghost" title="List cookies">
-          Cookies
-        </button>
-        <button onClick={cb.downloads} disabled={loading} className="btn-ghost" title="List downloads">
-          Downloads
-        </button>
-        <BatchButton disabled={loading} onSubmit={cb.batch} />
-
-        {lastResult && (
-          <div className="ml-auto text-xs text-text-dim max-w-xs truncate">
-            last: {formatResult(lastResult)}
-          </div>
-        )}
       </div>
-    </div>
-  );
-}
 
-function formatResult(r: ActionResult): string {
-  switch (r.type) {
-    case 'navigated': return `→ ${r.url?.slice(0, 40) ?? ''}`;
-    case 'clicked': return `clicked nav=${r.navigated}`;
-    case 'elements': return `${r.refs.length} found`;
-    case 'flag': return `ok=${r.ok}`;
-    case 'done': return 'done';
-    case 'text': return `"${r.text.slice(0, 40)}"`;
-    case 'image': return 'png';
-    case 'tabs': return `${r.tabs.length} tabs`;
-    case 'tools': return `${r.tools.length} tools`;
-    default: return r.type;
-  }
-}
+      {/* Row 2: Selected Element Staged Target & Interaction Deck */}
+      <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-surface/70 border border-border rounded-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-text-muted uppercase tracking-wider">
+            STAGED TARGET:
+          </span>
+          {selectedRef ? (
+            <div className="flex items-center gap-2">
+              <span className="badge-orange font-bold">{selectedRef}</span>
+              <span className="text-text-dim text-[11px]">[{selectedNode?.role}]</span>
+              {selectedNode?.name && (
+                <span className="text-bone font-sans font-medium text-xs max-w-[180px] truncate">
+                  "{selectedNode.name}"
+                </span>
+              )}
+              <button
+                onClick={onClear}
+                className="text-text-muted hover:text-danger text-[10px] uppercase font-bold ml-1"
+                title="Deselect target"
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <span className="text-text-muted text-[11px] italic font-sans">
+              Click any element in snapshot below to stage for action
+            </span>
+          )}
+        </div>
 
-type SubmitFn<T> = (value: T) => Promise<unknown>;
+        {/* Action triggers */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => cb.click()}
+            disabled={loading || !selectedRef}
+            className="btn-primary"
+            title="Dispatch trusted mouse click at box-model center"
+          >
+            CLICK {selectedRef || ''}
+          </button>
 
-function FillField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [text, setText] = useState('');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" placeholder="fill text..." value={text}
-        onChange={(e) => setText(e.target.value)}
-        className="input-sm" disabled={disabled} />
-      <button onClick={() => { onSubmit(text); setText(''); }}
-        disabled={disabled || !text} className="btn-primary text-xs">Fill
-      </button>
-    </div>
-  );
-}
-
-function SelectField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [value, setValue] = useState('');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" placeholder="option value..." value={value}
-        onChange={(e) => setValue(e.target.value)}
-        className="input-sm w-32" disabled={disabled} />
-      <button onClick={() => { onSubmit(value); setValue(''); }}
-        disabled={disabled || !value} className="btn-primary text-xs">Select
-      </button>
-    </div>
-  );
-}
-
-function PressKeyField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [key, setKey] = useState('Enter');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" value={key} onChange={(e) => setKey(e.target.value)}
-        className="input-sm w-20" disabled={disabled} />
-      <button onClick={() => onSubmit(key)} disabled={disabled} className="btn-primary text-xs">Key</button>
-    </div>
-  );
-}
-
-function CssField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [selector, setSelector] = useState('a');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" value={selector} onChange={(e) => setSelector(e.target.value)}
-        className="input-sm w-32" disabled={disabled} />
-      <button onClick={() => { onSubmit(selector); setSelector('a'); }}
-        disabled={disabled} className="btn-primary text-xs">Find</button>
-    </div>
-  );
-}
-
-function EvalField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [expr, setExpr] = useState('navigator.webdriver');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" value={expr} onChange={(e) => setExpr(e.target.value)}
-        className="input-sm w-48" disabled={disabled} />
-      <button onClick={() => { onSubmit(expr); }}
-        disabled={disabled} className="btn-primary text-xs">Eval</button>
-    </div>
-  );
-}
-
-function FileInputField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string[]> }) {
-  const [paths, setPaths] = useState('');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="text" placeholder="/path/to/file,s2" value={paths}
-        onChange={(e) => setPaths(e.target.value)}
-        className="input-sm w-32" disabled={disabled} />
-      <button onClick={() => { onSubmit(paths.split(',')); setPaths(''); }}
-        disabled={disabled || !paths} className="btn-primary text-xs">Upload</button>
-    </div>
-  );
-}
-
-function NavigateField({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<string> }) {
-  const [url, setUrl] = useState('https://example.com');
-  return (
-    <div className="flex items-center gap-1">
-      <input type="url" placeholder="https://..." value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        className="input-sm w-48" disabled={disabled} />
-      <button onClick={() => onSubmit(url)} disabled={disabled || !url}
-        className="btn-primary text-xs">Go</button>
-    </div>
-  );
-}
-
-function BatchButton({ disabled, onSubmit }: { disabled: boolean; onSubmit: SubmitFn<unknown[]> }) {
-  const [json, setJson] = useState('');
-  const [show, setShow] = useState(false);
-  return (
-    <>
-      <button onClick={() => setShow(true)} disabled={disabled} className="btn-ghost">
-        Batch
-      </button>
-      {show && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card border border-border rounded p-4 w-96">
-            <h3 className="text-text font-medium mb-2">Batch Actions (JSON array)</h3>
-            <textarea
-              value={json}
-              onChange={(e) => setJson(e.target.value)}
-              placeholder='[{"type":"navigate","url":"https://example.com"},{"type":"extract"}]'
-              className="w-full h-24 px-2 py-1 bg-bg border border-border rounded text-sm text-text font-mono resize-none"
+          {/* Fill Input field */}
+          <form onSubmit={handleFillSubmit} className="flex items-center gap-1">
+            <input
+              type="text"
+              value={fillText}
+              onChange={(e) => setFillText(e.target.value)}
+              placeholder="Fill value..."
+              disabled={loading || !selectedRef}
+              className="input-sm w-32"
             />
-            <div className="flex gap-2 mt-2 justify-end">
-              <button onClick={() => setShow(false)} className="px-3 py-1 bg-border rounded text-sm">
-                Cancel
+            <button
+              type="submit"
+              disabled={loading || !selectedRef || !fillText}
+              className="btn-secondary"
+            >
+              FILL
+            </button>
+          </form>
+
+          {/* Key Press */}
+          <div className="flex items-center gap-1">
+            <select
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              disabled={loading}
+              className="input-sm bg-bg text-bone py-1"
+            >
+              <option value="Enter">Enter</option>
+              <option value="Tab">Tab</option>
+              <option value="Escape">Escape</option>
+              <option value="ArrowDown">Down</option>
+              <option value="ArrowUp">Up</option>
+            </select>
+            <button
+              onClick={() => cb.pressKey(keyInput)}
+              disabled={loading}
+              className="btn-secondary"
+              title="Dispatch keyboard key"
+            >
+              KEY
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 3: Extended Tools (CSS Search, Eval, Batch, State) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] pt-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* CSS Resolver */}
+          <div className="flex items-center gap-1">
+            <span className="text-text-muted text-[10px]">CSS:</span>
+            <input
+              type="text"
+              value={cssSelector}
+              onChange={(e) => setCssSelector(e.target.value)}
+              placeholder="selector"
+              className="input-sm w-28 py-0.5"
+            />
+            <button
+              onClick={() => cb.findCss(cssSelector)}
+              disabled={loading || !cssSelector}
+              className="btn-ghost py-0.5"
+            >
+              FIND
+            </button>
+          </div>
+
+          {/* Eval */}
+          <div className="flex items-center gap-1">
+            <span className="text-text-muted text-[10px]">JS:</span>
+            <input
+              type="text"
+              value={evalExpr}
+              onChange={(e) => setEvalExpr(e.target.value)}
+              placeholder="expression"
+              className="input-sm w-36 py-0.5"
+            />
+            <button
+              onClick={() => cb.evalText(evalExpr)}
+              disabled={loading || !evalExpr}
+              className="btn-ghost py-0.5"
+            >
+              EVAL
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => cb.cookies()}
+            disabled={loading}
+            className="btn-ghost py-0.5"
+          >
+            COOKIES
+          </button>
+          <button
+            onClick={() => cb.downloads()}
+            disabled={loading}
+            className="btn-ghost py-0.5"
+          >
+            DOWNLOADS
+          </button>
+          <button
+            onClick={() => setBatchModalOpen(true)}
+            disabled={loading}
+            className="btn-orange-outline py-0.5"
+          >
+            BATCH JSON ⚡
+          </button>
+        </div>
+      </div>
+
+      {/* Batch Modal */}
+      {batchModalOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="te-panel rounded-xs border-accent p-5 w-full max-w-lg space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <span className="font-mono text-xs font-bold text-bone uppercase flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-accent" />
+                DISPATCH BATCH ACTIONS (FAIL-FAST)
+              </span>
+              <button
+                onClick={() => setBatchModalOpen(false)}
+                className="text-text-dim hover:text-text"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-[11px] text-text-dim font-sans">
+              Send an array of action payloads executed sequentially in a single round-trip:
+            </p>
+            <textarea
+              value={batchJson}
+              onChange={(e) => setBatchJson(e.target.value)}
+              rows={6}
+              className="w-full bg-bg border border-border rounded-xs p-3 font-mono text-xs text-emerald-400 focus:outline-none focus:border-accent"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBatchModalOpen(false)}
+                className="btn-ghost"
+              >
+                CANCEL
               </button>
               <button
-                onClick={() => {
-                  try {
-                    const actions = JSON.parse(json);
-                    onSubmit(actions);
-                    setShow(false);
-                  } catch {
-                    alert('Invalid JSON');
-                  }
-                }}
-                disabled={disabled || !json}
-                className="px-3 py-1 btn-primary text-sm"
+                onClick={handleBatchSubmit}
+                disabled={loading}
+                className="btn-primary"
               >
-                Run
+                DISPATCH BATCH ›
               </button>
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

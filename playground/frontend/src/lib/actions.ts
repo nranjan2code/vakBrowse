@@ -59,33 +59,48 @@ export async function pressKey(sid: string, keyParam: string): Promise<ActionRes
   return resp.Ok.Result;
 }
 
-export async function extract(sid: string): Promise<string> {
+export async function extract(sid: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'extract' } });
-  return resp.Ok.Result.text;
+  return resp.Ok.Result;
 }
 
-export async function source(sid: string): Promise<string> {
+export async function source(sid: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'source' } });
-  return resp.Ok.Result.text;
+  return resp.Ok.Result;
 }
 
-export async function screenshot(sid: string): Promise<string> {
+export async function screenshot(sid: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'screenshot', full_page: false } });
-  return resp.Ok.Result.png_base64;
+  return resp.Ok.Result;
 }
 
-export async function evalText(sid: string, expr: string): Promise<string> {
+export async function evalText(sid: string, expr: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'eval_text', expression: expr } });
-  return resp.Ok.Result.text;
+  return resp.Ok.Result;
 }
 
-export async function findByCss(sid: string, selector: string): Promise<ElementRef[]> {
+export async function findByCss(sid: string, selector: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'find_by_css', selector } });
-  return resp.Ok.Result.refs;
+  return resp.Ok.Result;
 }
 
 export async function navigate(sid: string, url: string): Promise<ActionResult> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'navigate', url } });
+  return resp.Ok.Result;
+}
+
+export async function back(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'back' } });
+  return resp.Ok.Result;
+}
+
+export async function forward(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'forward' } });
+  return resp.Ok.Result;
+}
+
+export async function reload(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'reload' } });
   return resp.Ok.Result;
 }
 

@@ -2569,6 +2569,7 @@ dependencies = [
  "quick-js",
  "serde_json",
  "tokio",
+ "ureq",
  "url",
  "vakbrowse-core",
  "vakbrowse-engine",

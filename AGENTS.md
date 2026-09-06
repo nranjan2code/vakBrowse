@@ -324,17 +324,20 @@ playground/
   rotation only changes the source IP — it does NOT defeat TLS/HTTP2
   fingerprinting or behavioral biometrics (DDG/Bing/Cloudflare hard-wall even
   under `--stealth` + rotation).
-- `vakbrowse-dom` (experimental pure-Rust backend, `DomLauncher`) proves the
-  engine seam is swappable: it implements `EngineLauncher`/`PageOps` with no
-  browser process and no JS engine. Honest limits: navigation is **file://
-  only** (the tokenizer parses HTML in-process; `about:`/`http`/`https` are
-  accepted by `validate_url` but no network fetch occurs); JS-dependent ops
-  return `Unsupported` (`eval_text`, `wait_for_truthy`, `screenshot`,
-  `click_at`, `press_key`); fills/mutations persist in the snapshot tree but
-  no real rendering viewport exists. Useful for hermetic fixture-driven
-  agent tests of the `Request::Batch`/`RotateProxy`/`fill→snapshot` path
-  without chrome. Servo/Lightpanda remain the only route to real JS in a
-  non-Chromium backend.
+- `vakbrowse-dom` (pure-Rust backend, `DomLauncher`) proves the engine seam
+  is swappable: it implements `EngineLauncher`/`PageOps` with no Chromium
+  process and embedded QuickJS. Navigation performs real network fetches over
+  **http://** and **https://** via `ureq` (alongside `file://` and `about:`),
+  parses HTML in-process, evaluates inline and interactive JavaScript with
+  embedded QuickJS, dispatches real link click navigations with full WHATWG
+  `url::Url` resolution (handling relative links, root paths, scheme-relative
+  URLs, and in-page hash fragments without 404s), executes `onclick` handlers,
+  delivers unaltered pristine HTML through `source()`, and builds stable
+  `@eN` perception trees. In the playground, live visual previews are rendered
+  via sandboxed HTML frames (`liveHtml` with base-tag resolution loading the
+  site's real native stylesheets and assets). Honest limits: no layout/rasterizer
+  viewport (`screenshot` / `click_at` return `Unsupported`), so visual pixel
+  screenshot streaming requires the CDP backend.
 - Dogfood findings (real web): Wikipedia/GitHub/example.com/HN flows work
   end-to-end: a Wikipedia search -> click result lands on the article; an
   example.com -> click "Learn more" lands on www.iana.org — both proven by

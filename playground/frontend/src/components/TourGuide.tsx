@@ -1,175 +1,88 @@
 import React from 'react';
 
-// Guided tour that walks through all vakBrowse capabilities.
-// Each step highlights a UI region and explains what to look for.
-
 export interface TourStep {
   id: string;
   title: string;
   description: string[];
-  target?: string; // CSS selector of element to highlight
-  action?: () => Promise<void>;
+  target?: string;
 }
 
 export const TOUR_STEPS: TourStep[] = [
   {
     id: 'open',
-    title: 'Open a Session',
+    title: 'Open a Browser Instance',
     description: [
-      'Sessions are the unit of browser interaction. Each session is a Chrome tab.',
-      'Use the Session Manager on the left to open a new browser session.',
-      'Try opening https://example.com to start.',
+      'Each session is an autonomous browser instance with its own tab registry and cookies.',
+      'Use the Session Deck on the left or select a verified workflow preset.',
+      'Try starting with https://en.wikipedia.org or https://example.com.',
     ],
     target: '.session-manager',
   },
   {
     id: 'snapshot',
-    title: 'Accessibility Snapshot',
+    title: 'Compact Accessibility Snapshot (<500 Tokens)',
     description: [
-      'The snapshot shows all interactive elements on the page as @eN refs.',
-      'These refs are stable across snapshots and are how you target elements for click/fill.',
-      'Click any element in the snapshot to select it.',
+      'The snapshot maps all interactive elements to stable @eN references.',
+      'Unlike fragile CSS selectors, @eN refs remain constant across inspection turns.',
+      'Click any node in the list to stage it into the Action Deck.',
     ],
     target: '.snapshot-view',
   },
   {
     id: 'click',
-    title: 'Click an Element',
+    title: 'Trusted Mouse Click Dispatch',
     description: [
-      'Select an element (e.g. @e1 "Learn more" on example.com) and click it.',
-      'The browser will click the element using Input.dispatchMouseEvent at its center.',
-      'If the click causes navigation, the snapshot auto-refreshes to the new page.',
+      'Select any element (e.g. @e1 "Learn more") and trigger Click.',
+      'vakBrowse calculates the box-model center and dispatches genuine hardware mouse events.',
+      'Automatic scrollIntoView({block:\'center\'}) brings below-the-fold elements into view.',
     ],
     target: '.action-toolbar',
   },
   {
     id: 'fill',
-    title: 'Fill Text',
+    title: 'Native Form & Text Input',
     description: [
-      'For input/textarea elements, use the Fill field to set text.',
-      'vakBrowse focuses the element first, then sets its value with input/change events — React/Vue-safe.',
-      'On Wikipedia, fill the search box and press Enter to search.',
-    ],
-    target: '.action-toolbar',
-  },
-  {
-    id: 'find',
-    title: 'Find by CSS',
-    description: [
-      'CSS selectors resolve to @eN refs immediately — no intermediate snapshot needed.',
-      'On CDP, the selector runs via document.querySelectorAll and matches back to snapshot refs.',
-      'Try "a[href*=\"privacy"]" on an iana.org page.',
+      'Focuses the target element and applies native prototype property setters.',
+      'Triggers synthetic input and change events — 100% React and Vue safe.',
+      'Follow up with a keyboard "Enter" action to submit search boxes.',
     ],
     target: '.action-toolbar',
   },
   {
     id: 'extract',
-    title: 'Extract Content',
+    title: 'Readability-Style Markdown Extraction',
     description: [
-      'The Extract button returns readability-style main-content text.',
-      'It strips navigation, ads, and boilerplate — perfect for reading articles.',
-      'Token-efficient: ~20KB from a 500KB Wikipedia page.',
+      'Extracts clean main-content text without navigation boilerplate, headers, or ads.',
+      'Compresses 500KB of article HTML down to ~20KB of high-density markdown for RAG.',
     ],
     target: '.result-pane',
   },
   {
-    id: 'source',
-    title: 'Page Source',
+    id: 'wire-protocol',
+    title: 'Live Wire Protocol Inspector',
     description: [
-      'Returns the full HTML source of the current page.',
-      'Useful for understanding page structure before picking selectors.',
+      'Toggle "WIRE PROTOCOL JSON" in the right telemetry monitor to see the raw request/response.',
+      'All surfaces (Daemon, CLI, MCP, Python SDK, and REST) speak this exact unified model.',
     ],
     target: '.result-pane',
-  },
-  {
-    id: 'eval',
-    title: 'JavaScript Evaluation',
-    description: [
-      'Eval any JavaScript expression. Returns are stringified (REPL semantics).',
-      'Try "navigator.webdriver" — false under stealth, true otherwise.',
-      'Objects/arrays become JSON strings; numbers/booleans stringify.',
-    ],
-    target: '.action-toolbar',
-  },
-  {
-    id: 'screenshot',
-    title: 'Screenshot',
-    description: [
-      'Takes a real PNG screenshot of the page.',
-      'Base64-encoded for easy embedding in results.',
-    ],
-    target: '.action-toolbar',
-  },
-  {
-    id: 'file-upload',
-    title: 'File Upload',
-    description: [
-      'Set file input elements with the File Upload field.',
-      'Uses DOM.setFileInputFiles to bypass browser security on programmatic .files assignment.',
-      'Enter paths as comma-separated: /path/to/file1, /path/to/file2',
-    ],
-    target: '.action-toolbar',
-  },
-  {
-    id: 'cookies',
-    title: 'Cookies & Downloads',
-    description: [
-      'List, set, and clear cookies per session.',
-      'Download listing reads the configured download directory.',
-      'Set download directory before downloading files.',
-    ],
-    target: '.action-toolbar',
-  },
-  {
-    id: 'batch',
-    title: 'Action Batching',
-    description: [
-      'Batch multiple actions in one request — fail-fast on first error.',
-      'Each action returns a result, giving you one result per action.',
-      'Try: [{"type":"navigate","url":"https://example.com"},{"type":"extract"}]',
-    ],
-    target: '.action-toolbar',
   },
   {
     id: 'stealth',
-    title: 'Stealth Mode',
+    title: 'Hardware Stealth & Anti-Wall Evasions',
     description: [
-      'When opening a session, enable Stealth to defeat webdriver/plugin/pointer tells.',
-      'It does NOT defeat TLS fingerprinting or behavioral biometrics.',
-      'Site isolation is intentionally left ON.',
-    ],
-    target: '.session-manager',
-  },
-  {
-    id: 'proxy',
-    title: 'Proxy & Rotation',
-    description: [
-      'Set a single proxy via --proxy, or a pool via --proxies a,b.',
-      'RotateProxy re-launches Chrome on the next endpoint and restores the session URL.',
-      'Rotation changes source IP only — does not defeat TLS/HTTP2 fingerprinting.',
+      'Drops --enable-automation flags and masks navigator.webdriver.',
+      'Injects genuine hardware plugin arrays and human-like Bézier pointer trajectories.',
     ],
     target: '.session-manager',
   },
   {
     id: 'dom-backend',
-    title: 'DOM Backend',
+    title: 'Zero-Chromium DOM Backend (QuickJS)',
     description: [
-      'Select "DOM" backend to use a pure-Rust HTML parser + QuickJS — no Chrome process.',
-      'File-only navigation. JS eval and event dispatch work in-process.',
-      'Proves the engine seam is swappable.',
+      'Select "DOM" backend to run tests with zero Chromium processes.',
+      'In-process HTML tokenization and embedded QuickJS for instant hermetic CI testing.',
     ],
     target: '.session-manager',
-  },
-  {
-    id: 'done',
-    title: 'You\'re Ready!',
-    description: [
-      'vakBrowse gives AI agents a real, scriptable web browser.',
-      'All capabilities go through the EngineLauncher/PageOps traits.',
-      'The daemon, CLI, MCP, REST API, and FFI all speak the same Request model.',
-      '',
-      'Happy browsing!',
-    ],
   },
 ];
 
@@ -182,27 +95,51 @@ export function TourGuide({ visible, onClose }: Props) {
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
-        <h2 className="text-xl font-medium text-text mb-4">vakBrowse Playground Tour</h2>
-        <div className="space-y-3 text-sm">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-mono text-xs">
+      <div className="te-panel rounded-xs border-accent p-6 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-border">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-xs bg-accent" />
+            <span className="font-bold text-bone uppercase tracking-wider text-sm">
+              VAKBROWSE CAPABILITY TOUR // SPEC MANUAL
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-text-muted hover:text-text text-sm font-bold"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
           {TOUR_STEPS.map((step, i) => (
-            <div key={step.id} className="border-b border-border pb-3 last:border-0">
-              <h3 className="font-medium text-accent">{i + 1}. {step.title}</h3>
-              <ul className="mt-1 space-y-1 text-text-dim">
+            <div key={step.id} className="p-3 bg-surface/50 border border-border rounded-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-accent">
+                  [{String(i + 1).padStart(2, '0')}] {step.title}
+                </span>
+              </div>
+              <ul className="space-y-1 text-text-dim text-[11px] font-sans">
                 {step.description.map((desc, j) => (
-                  desc ? <li key={j}>• {desc}</li> : <li key={j}>&nbsp;</li>
+                  <li key={j} className="flex items-start gap-1.5">
+                    <span className="text-text-muted font-mono">›</span>
+                    <span>{desc}</span>
+                  </li>
                 ))}
               </ul>
             </div>
           ))}
         </div>
-        <button
-          onClick={onClose}
-          className="mt-4 px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded"
-        >
-          Close Tour
-        </button>
+
+        <div className="pt-3 border-t border-border flex justify-end">
+          <button
+            onClick={onClose}
+            className="btn-primary"
+          >
+            EXIT TOUR GUIDE ›
+          </button>
+        </div>
       </div>
     </div>
   );

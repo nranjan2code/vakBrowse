@@ -21,6 +21,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use ureq::ResponseExt;
 
 use vakbrowse_core::{
     Cookie, CookieInput, ElementRef, Extracted, Result, Snapshot, SnapshotNode, TabId, TabInfo,
@@ -263,24 +264,20 @@ fn tokenize(html: &str) -> Vec<Token> {
                     // text child so it can be executed on load (a `>` or `<`
                     // inside must not be tokenized as markup); `<style>` body
                     // is dropped (not JS-runnable, not a11y-relevant).
-                    if tag == "script" && !self_closing {
+                    if (tag == "script" || RAW_TEXT.iter().any(|r| *r == tag)) && !self_closing {
                         if let Some(start) = find_close_tag(bytes, &tag, i) {
                             let raw = html[i..start].trim().to_string();
                             if !raw.is_empty() {
                                 out.push(Token::Text(raw));
                             }
+                            out.push(Token::End(tag.clone()));
                             i = tag_end(bytes, start);
                         } else {
                             let raw = html[i..].trim().to_string();
                             if !raw.is_empty() {
                                 out.push(Token::Text(raw));
                             }
-                            i = bytes.len();
-                        }
-                    } else if RAW_TEXT.iter().any(|r| *r == tag) && !self_closing {
-                        if let Some(start) = find_close_tag(bytes, &tag, i) {
-                            i = tag_end(bytes, start);
-                        } else {
+                            out.push(Token::End(tag.clone()));
                             i = bytes.len();
                         }
                     } else if RCDATA.iter().any(|r| *r == tag) && !self_closing {
@@ -289,12 +286,14 @@ fn tokenize(html: &str) -> Vec<Token> {
                             if !text.is_empty() {
                                 out.push(Token::Text(text));
                             }
+                            out.push(Token::End(tag.clone()));
                             i = tag_end(bytes, start);
                         } else {
                             let text = unescape(html[i..].trim());
                             if !text.is_empty() {
                                 out.push(Token::Text(text));
                             }
+                            out.push(Token::End(tag.clone()));
                             i = bytes.len();
                         }
                     }
@@ -433,21 +432,17 @@ fn tc(n: &Node, out: &mut String) {
     }
 }
 
-/// Resolve a relative URL against the document's base.
+/// Resolve a relative or absolute URL against the document's base.
 fn resolve_href(base: &str, href: &str) -> String {
-    if href.starts_with("http://")
-        || href.starts_with("https://")
-        || href.starts_with("file://")
-        || href.starts_with("data:")
+    if href.starts_with("javascript:") || href.starts_with("data:") {
+        return href.to_string();
+    }
+    if let Ok(base_url) = url::Url::parse(base)
+        && let Ok(joined) = base_url.join(href)
     {
-        return href.to_string();
+        return joined.to_string();
     }
-    if base.is_empty() || base == "about:blank" {
-        return href.to_string();
-    }
-    base.rsplit_once('/')
-        .map(|(d, _)| format!("{d}/{href}"))
-        .unwrap_or_else(|| href.to_string())
+    href.to_string()
 }
 
 /// Name for an interactive element: aria-label > placeholder > title >
@@ -485,6 +480,7 @@ pub struct DomPage {
     /// only if the worker thread failed to spawn; then JS-backed ops return
     /// `Unsupported`.
     js: Option<JsRuntime>,
+    raw_source: String,
 }
 
 static TAB_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -568,6 +564,7 @@ impl DomPage {
             js: JsRuntime::new(Arc::clone(&doc)).ok(),
             doc,
             cookies: std::sync::Mutex::new(vec![]),
+            raw_source: String::new(),
         }
     }
 
@@ -580,6 +577,7 @@ impl DomPage {
             let href = parsed.as_str().to_string();
             self.url = href.clone();
             if let Some(h) = next_html.take() {
+                self.raw_source = h.clone();
                 let built = build_tree(&tokenize(&h));
                 self.doc = Arc::new(RwLock::new(built));
             } else if parsed.scheme() == "file" {
@@ -587,19 +585,55 @@ impl DomPage {
                     .to_file_path()
                     .map_err(|e| VakError::Engine(format!("bad file url: {e:?}")))?;
                 let h = std::fs::read_to_string(&p).map_err(VakError::Io)?;
+                self.raw_source = h.clone();
                 let built = build_tree(&tokenize(&h));
                 self.doc = Arc::new(RwLock::new(built));
             } else if parsed.scheme() == "about" {
+                self.raw_source = String::new();
                 self.doc = Arc::new(RwLock::new(Node {
                     tag: "".into(),
                     attrs: vec![],
                     text: String::new(),
                     children: vec![],
                 }));
+            } else if parsed.scheme() == "http" || parsed.scheme() == "https" {
+                let fetch_url = href.clone();
+                let (final_url, body) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                    let agent = ureq::Agent::new_with_config(
+                        ureq::Agent::config_builder()
+                            .timeout_global(Some(std::time::Duration::from_secs(15)))
+                            .build(),
+                    );
+                    let resp = agent
+                        .get(&fetch_url)
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+                             (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                        )
+                        .header(
+                            "Accept",
+                            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        )
+                        .call()
+                        .map_err(|e| VakError::Engine(format!("network fetch failed: {e}")))?;
+                    let final_uri = resp.get_uri().to_string();
+                    let mut reader = resp.into_body().into_reader();
+                    let mut text = String::new();
+                    std::io::Read::read_to_string(&mut reader, &mut text).map_err(VakError::Io)?;
+                    Ok((final_uri, text))
+                })
+                .await
+                .map_err(|e| VakError::Engine(format!("fetch task join failed: {e}")))??;
+                self.url = final_url;
+                self.raw_source = body.clone();
+                let built = build_tree(&tokenize(&body));
+                self.doc = Arc::new(RwLock::new(built));
             } else {
-                return Err(VakError::Engine(
-                    "dom backend: no network fetch (use file://)".into(),
-                ));
+                return Err(VakError::Engine(format!(
+                    "dom backend: unsupported scheme '{}'",
+                    parsed.scheme()
+                )));
             }
             // Fresh JS worker for this document (isolates the context to this
             // page: scripts re-run, globals don't leak across navigations). The
@@ -616,7 +650,11 @@ impl DomPage {
                 let nav = js.check_nav().await?;
                 if !nav.is_empty() && depth < 8 {
                     let target = resolve_href(&href, &nav);
-                    if target.starts_with("file://") || target.starts_with("about:") {
+                    if target.starts_with("file://")
+                        || target.starts_with("about:")
+                        || target.starts_with("http://")
+                        || target.starts_with("https://")
+                    {
                         next_url = target;
                         depth += 1;
                         continue;
@@ -855,15 +893,22 @@ impl PageOps for DomPage {
         }
     }
     async fn click(&mut self, r: &ElementRef) -> Result<ClickResult> {
-        // Resolve the href (if any) and DROP the element borrow before any
-        // mutable op on `self`, so borrowck is happy. Anchor navigation only
-        // honors file:// and about: (no network in this backend).
         let target = ref_to_index(&r.0);
-        let href = target.and_then(|t| {
-            let guard = self.doc.read().unwrap_or_else(|e| e.into_inner());
-            let mut seen = 0usize;
-            find_by_index_ref(&guard, t, &mut seen).and_then(|n| n.attr("href").map(String::from))
-        });
+        let (href, onclick) = target
+            .map(|t| {
+                let guard = self.doc.read().unwrap_or_else(|e| e.into_inner());
+                let mut seen = 0usize;
+                if let Some(n) = find_by_index_ref(&guard, t, &mut seen) {
+                    (
+                        n.attr("href").map(String::from),
+                        n.attr("onclick").map(String::from),
+                    )
+                } else {
+                    (None, None)
+                }
+            })
+            .unwrap_or((None, None));
+
         if let Some(href) = href {
             // `javascript:` URLs: run the script on the JS engine; a non-empty
             // string result is treated as a navigation target (browser parity),
@@ -875,19 +920,70 @@ impl PageOps for DomPage {
                 };
                 if let Some(url) = outcome.strip_prefix("nav:") {
                     let target = resolve_href(&self.url, url);
-                    if target.starts_with("file://") || target.starts_with("about:") {
+                    if target.starts_with("file://")
+                        || target.starts_with("about:")
+                        || target.starts_with("http://")
+                        || target.starts_with("https://")
+                    {
                         let nav = self.load(&target, None).await?;
                         return Ok(ClickResult::navigated(nav.url));
                     }
                 }
                 return Ok(ClickResult::stayed());
             }
+
             let target = resolve_href(&self.url, &href);
-            if target.starts_with("file://") || target.starts_with("about:") {
+
+            // In-page hash/fragment navigation (e.g. #cite_note-15, #History)
+            let is_same_page_fragment = if let (Ok(u1), Ok(u2)) =
+                (url::Url::parse(&self.url), url::Url::parse(&target))
+            {
+                u1.scheme() == u2.scheme()
+                    && u1.host_str() == u2.host_str()
+                    && u1.port() == u2.port()
+                    && u1.path() == u2.path()
+                    && u1.query() == u2.query()
+                    && u1.fragment() != u2.fragment()
+            } else {
+                false
+            };
+
+            if is_same_page_fragment {
+                self.url = target.clone();
+                if let Some(js) = &self.js {
+                    let _ = js.set_location(&target).await;
+                }
+                return Ok(ClickResult::navigated(target));
+            }
+
+            if target.starts_with("file://")
+                || target.starts_with("about:")
+                || target.starts_with("http://")
+                || target.starts_with("https://")
+            {
                 let nav = self.load(&target, None).await?;
                 return Ok(ClickResult::navigated(nav.url));
             }
         }
+
+        if let Some(script) = onclick
+            && let Some(js) = &self.js
+        {
+            let _ = js.eval_text(&script).await;
+            let nav = js.check_nav().await?;
+            if !nav.is_empty() {
+                let target = resolve_href(&self.url, &nav);
+                if target.starts_with("file://")
+                    || target.starts_with("about:")
+                    || target.starts_with("http://")
+                    || target.starts_with("https://")
+                {
+                    let nav_res = self.load(&target, None).await?;
+                    return Ok(ClickResult::navigated(nav_res.url));
+                }
+            }
+        }
+
         Ok(ClickResult::stayed())
     }
     async fn fill(&mut self, r: &ElementRef, text: &str) -> Result<()> {
@@ -995,7 +1091,11 @@ impl PageOps for DomPage {
         Ok(())
     }
     async fn source(&self) -> Result<String> {
-        Ok(self.serialize_html(&self.doc.read().unwrap_or_else(|e| e.into_inner())))
+        if !self.raw_source.is_empty() {
+            Ok(self.raw_source.clone())
+        } else {
+            Ok(self.serialize_html(&self.doc.read().unwrap_or_else(|e| e.into_inner())))
+        }
     }
     async fn screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
         Err(VakError::Unsupported(

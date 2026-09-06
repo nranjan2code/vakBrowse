@@ -2,29 +2,87 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+    font-feature-settings: 'tnum' 1, 'ss01' 1;
+  }
+}
+
 @layer components {
+  /* Tactile Teenage Engineering push button styles */
   .btn-primary {
-    @apply px-3 py-1 rounded text-sm font-medium bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-sm text-xs font-mono font-semibold tracking-wider uppercase bg-accent hover:bg-accent-hover text-white shadow-te-button active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 disabled:pointer-events-none;
   }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-mono tracking-wider uppercase bg-surface hover:bg-surface-elevated border border-border hover:border-border-strong text-bone transition-all active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none;
+  }
+
   .btn-success {
-    @apply px-3 py-1 rounded text-sm font-medium bg-success/20 hover:bg-success/30 text-success transition-colors disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-mono tracking-wider uppercase bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-700/60 text-emerald-400 transition-all active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none;
   }
+
   .btn-ghost {
-    @apply px-3 py-1 rounded text-sm font-medium bg-card hover:bg-accent/20 text-text transition-colors disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-sm text-xs font-mono tracking-wider uppercase bg-transparent hover:bg-surface text-text-dim hover:text-text border border-transparent hover:border-border transition-all disabled:opacity-40 disabled:pointer-events-none;
   }
+
+  .btn-orange-outline {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-sm text-xs font-mono tracking-wider uppercase bg-accent-dim hover:bg-accent/20 border border-accent/60 text-accent transition-all active:translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none;
+  }
+
   .input-sm {
-    @apply px-2 py-1 bg-bg border border-border rounded text-sm text-text disabled:opacity-50;
+    @apply px-2.5 py-1.5 bg-bg/80 border border-border hover:border-border-strong focus:border-accent focus:outline-none rounded-sm text-xs font-mono text-text placeholder-text-muted shadow-te-inset transition-colors disabled:opacity-40;
   }
-  .session-manager {
-    /* target for tour highlight */
+
+  /* TE Industrial Badges & Labels */
+  .badge-te {
+    @apply inline-flex items-center px-1.5 py-0.5 rounded-xs text-[10px] font-mono tracking-widest uppercase border;
   }
-  .snapshot-view {
-    /* target for tour highlight */
+
+  .badge-orange {
+    @apply badge-te bg-accent-dim border-accent/40 text-accent;
   }
-  .action-toolbar {
-    /* target for tour highlight */
+
+  .badge-yellow {
+    @apply badge-te bg-yellow-dim border-yellow/40 text-yellow;
   }
-  .result-pane {
-    /* target for tour highlight */
+
+  .badge-dim {
+    @apply badge-te bg-surface border-border text-text-dim;
   }
+
+  .badge-green {
+    @apply badge-te bg-emerald-950/40 border-emerald-700/50 text-emerald-400;
+  }
+
+  /* TE Chassis Card */
+  .te-panel {
+    @apply bg-card border border-border shadow-te-inset relative;
+  }
+
+  .te-panel-header {
+    @apply px-3 py-2 border-b border-border bg-surface flex items-center justify-between text-xs font-mono uppercase tracking-wider text-text-dim;
+  }
+
+  /* Rotary Dial Graphic */
+  .knob-dial {
+    @apply w-10 h-10 rounded-full bg-surface border-2 border-border-strong flex items-center justify-center relative cursor-pointer shadow-te-knob;
+  }
+}
+
+/* Custom industrial scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0d0d10;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a34;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #ff4500;
 }

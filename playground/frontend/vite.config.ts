@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   // Assets are served from /playground/ in production (vakd-rest serves
   // the static build). In dev, Vite serves from root so base stays /.
-  base: process.env.NODE_ENV === 'production' ? '/playground/' : '/',
+  base: '/',
   server: {
     port: 3000,
     proxy: {

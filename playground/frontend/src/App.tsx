@@ -1,119 +1,75 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Header, PageTab } from './components/Header';
+import { Footer } from './components/Footer';
+import { HomePage } from './pages/HomePage';
+import { UseCasesPage } from './pages/UseCasesPage';
+import { ArchitecturePage } from './pages/ArchitecturePage';
+import { EconomicsPage } from './pages/EconomicsPage';
+import { DocsPage } from './pages/DocsPage';
+import { PricingPage } from './pages/PricingPage';
+import { PlaygroundWorkspace } from './components/PlaygroundWorkspace';
 import { useSessions } from './hooks/useSessions';
-import { useSession } from './hooks/useSession';
-import { SessionManager } from './components/SessionManager';
-import { SnapshotView } from './components/SnapshotView';
-import { ActionToolbar, ToolbarCallbacks } from './components/ActionToolbar';
-import { ResultPane } from './components/ResultPane';
-import { TourGuide } from './components/TourGuide';
-import type { SessionInfo } from './hooks/useSessions';
-import type { SnapshotNode } from './lib/types';
 
-function App() {
-  const [showTour, setShowTour] = useState(false);
-  const { sessions, loading: sessionsLoading, error: sessionsError, open, close, reload } = useSessions();
-  const [activeSession, setActiveSession] = useState<string | null>(null);
-  const session = useSession(activeSession);
+export function App() {
+  const [currentTab, setCurrentTab] = useState<PageTab>('overview');
+  const { sessions } = useSessions();
 
-  // Handle session open from SessionManager
-  const handleOpen = useCallback(async (opts: Record<string, unknown>) => {
-    try {
-      const result = await open(opts);
-      if (result && typeof result === 'object' && 'id' in result) {
-        setActiveSession((result as any).id);
-      }
-    } catch (e) {
-      // Error already surfaced via hooks
-    }
-  }, [open]);
+  // Read initial route from URL path or hash
+  useEffect(() => {
+    const parseRoute = () => {
+      const path = window.location.pathname.replace(/^\/playground\/?/, 'playground').replace(/^\//, '');
+      const hash = window.location.hash.replace(/^#\/?/, '');
+      const target = hash || path;
 
-  const handleClose = useCallback(async (sid: string) => {
-    await close(sid);
-    if (activeSession === sid) {
-      setActiveSession(null);
-      session.setSelectedRef(null);
-    }
-  }, [activeSession, close, session]);
+      if (target === 'use-cases') setCurrentTab('use-cases');
+      else if (target === 'architecture') setCurrentTab('architecture');
+      else if (target === 'economics') setCurrentTab('economics');
+      else if (target === 'docs') setCurrentTab('docs');
+      else if (target === 'pricing') setCurrentTab('pricing');
+      else if (target === 'playground' || target.startsWith('playground')) setCurrentTab('playground');
+      else setCurrentTab('overview');
+    };
 
-  // Build toolbar callbacks from the session hook
-  const toolbarCallbacks: ToolbarCallbacks = {
-    click: () => session.actions.click(session.selectedRef || '!') as any,
-    fill: (text: string) => session.actions.fill(session.selectedRef || '!', text) as any,
-    selectOption: (value: string) => session.actions.selectOption(session.selectedRef || '!', value) as any,
-    pressKey: (key: string) => session.actions.pressKey(key) as any,
-    findCss: (selector: string) => session.actions.findByCss(selector) as any,
-    evalText: (expr: string) => session.actions.evalText(expr) as any,
-    extract: () => session.actions.extract() as any,
-    source: () => session.actions.source() as any,
-    screenshot: () => session.actions.screenshot() as any,
-    navigate: (url: string) => session.actions.navigate(url) as any,
-    setFileChooser: (paths: string[]) => session.actions.setFileChooser(session.selectedRef || '!', paths) as any,
-    cookies: () => session.actions.getCookies() as any,
-    downloads: () => session.actions.getDownloads() as any,
-    batch: (actions: unknown[]) => session.actions.batch(actions) as any,
+    parseRoute();
+    window.addEventListener('popstate', parseRoute);
+    window.addEventListener('hashchange', parseRoute);
+    return () => {
+      window.removeEventListener('popstate', parseRoute);
+      window.removeEventListener('hashchange', parseRoute);
+    };
+  }, []);
+
+  const handleSelectTab = (tab: PageTab) => {
+    setCurrentTab(tab);
+    const newPath = tab === 'overview' ? '/' : `/${tab}`;
+    window.history.pushState({ tab }, '', newPath);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
-    <div className="flex h-screen bg-bg text-text font-sans">
-      {/* Session Manager sidebar */}
-      <SessionManager
-        sessions={sessions}
-        activeSession={activeSession}
-        onSelect={setActiveSession}
-        onOpen={handleOpen}
-        onClose={handleClose}
-        onList={reload}
+    <div className={`bg-bg text-text flex flex-col font-sans selection:bg-accent selection:text-white ${
+      currentTab === 'playground' ? 'h-screen overflow-hidden' : 'min-h-screen'
+    }`}>
+      {/* Universal TE Top Navigation Header */}
+      <Header
+        currentTab={currentTab}
+        onSelectTab={handleSelectTab}
+        activeSessionCount={sessions.length}
       />
 
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Action Toolbar */}
-        <ActionToolbar
-          selectedRef={session.selectedRef}
-          selectedNode={session.selectedNode ? {
-            role: session.selectedNode.role,
-            name: session.selectedNode.name,
-            value: session.selectedNode.value,
-          } : null}
-          cb={toolbarCallbacks}
-          loading={session.loading}
-          lastResult={session.lastResult}
-          onClear={() => session.setSelectedRef(null)}
-        />
+      {/* Main Viewport Container */}
+      <main className={`flex-1 flex flex-col ${currentTab === 'playground' ? 'min-h-0 overflow-hidden' : ''}`}>
+        {currentTab === 'overview' && <HomePage onNavigate={handleSelectTab} />}
+        {currentTab === 'use-cases' && <UseCasesPage onNavigate={handleSelectTab} />}
+        {currentTab === 'architecture' && <ArchitecturePage onNavigate={handleSelectTab} />}
+        {currentTab === 'economics' && <EconomicsPage onNavigate={handleSelectTab} />}
+        {currentTab === 'docs' && <DocsPage onNavigate={handleSelectTab} />}
+        {currentTab === 'pricing' && <PricingPage onNavigate={handleSelectTab} />}
+        {currentTab === 'playground' && <PlaygroundWorkspace />}
+      </main>
 
-        {/* Snapshot View */}
-        <div className="flex-1 overflow-y-auto">
-          <SnapshotView
-            snapshot={session.snapshot}
-            onElementClick={(node: SnapshotNode) => {
-              session.setSelectedRef(node.ref);
-            }}
-            selectedRef={session.selectedRef}
-          />
-        </div>
-      </div>
-
-      {/* Result Pane */}
-      <ResultPane lastResult={session.lastResult} loading={session.loading} />
-
-      {/* Tour overlay */}
-      {showTour && <TourGuide visible={showTour} onClose={() => setShowTour(false)} />}
-
-      {/* Error banner */}
-      {session.error && (
-        <div className="fixed bottom-4 right-4 bg-danger/20 border border-danger text-danger px-3 py-2 rounded text-sm max-w-sm">
-          {session.error}
-        </div>
-      )}
-
-      {/* Tour button */}
-      <button
-        onClick={() => setShowTour(true)}
-        className="fixed top-3 right-3 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium z-10"
-        title="Show guided tour"
-      >
-        ? Tour
-      </button>
+      {/* Technical Footer (Only rendered on marketing/documentation pages) */}
+      {currentTab !== 'playground' && <Footer onSelectTab={handleSelectTab} />}
     </div>
   );
 }

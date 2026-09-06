@@ -20,9 +20,9 @@ vakBrowse/
 │   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 34 browser_*
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
 │   ├── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
-│   └── vakbrowse-dom         # Experimental pure-Rust backend (no browser
-│                             #   process, no JS engine; `file://`-only). Swaps
-│                             #   into the same SessionManager via DomLauncher
+│   └── vakbrowse-dom         # Pure-Rust engine backend (no Chromium process,
+│                             #   real HTTP/HTTPS via ureq + rustls, embedded QuickJS).
+│                             #   Swaps into SessionManager via DomLauncher
 ├── bins/vakd                 # daemon (session pool, profiles, policy)
 └── tests/fixtures            # offline fixture pages
 ```
@@ -63,26 +63,23 @@ capability once, all five surfaces get it.
   sub-150ms randomized input delays (cadence tell, no TLS spoofing);
   `scripts/release.sh` bakes the pinned engine + gates mac/linux-root/
   linux-uid1000 green.
-- **Experimental non-Chromium backend (P8)** — `vakbrowse-dom`
-  (`DomLauncher`): an **optional** chrome-free backend (`cargo build
+- **Pure-Rust engine backend (P8)** — `vakbrowse-dom`
+  (`DomLauncher`): a chrome-free backend (`cargo build
   --features vakbrowse-server/dom-backend`) that implements the full
   `EngineLauncher`/`PageOps` seam and swaps into `SessionManager` with zero
-  chrome. QuickJS (`quick-js`) runs on a dedicated thread behind an `mpsc`
-  bridge; it parses HTML in-process and drives the **same** `Request::Batch` /
-  `RotateProxy` / fill→snapshot model as CDP. Opt-in per session
+  chrome. Performs real HTTP/HTTPS network fetches over rustls, embedded
+  QuickJS (`quick-js`) running on a dedicated thread behind an `mpsc`
+  bridge, standard WHATWG URL resolution, intact authentic source delivery,
+  fragment navigations, and event dispatch. It drives the **same**
+  `Request::Batch` / `RotateProxy` / fill→snapshot model as CDP. Opt-in per session
   (`vak open --backend dom`, `browser_open {backend:"dom"}`, REST
-  `{"options":{"backend":"dom"}}`); omit `backend` to defer to the server-wide
-  default (`VAKBROWSE_BACKEND=cdp|dom`, CDP unless overridden; honored by
-  `vakd serve` and `vakd-rest`). `Backend::Dom` requested without the feature
-  fails loud instead of silently falling back to Chrome. The backend now
-  supports `eval_text`, `wait_for_truthy`, inline `<script>` execution on
-  `load`, reactive `location`, `document.getElementById` (read/write
-  `textContent`/`value`), and `addEventListener`/`Event`/`requestSubmit` form
-  dispatch. Honest limits: **no layout, no network** — used for hermetic,
-  fast, chrome-free tests of the wire command model. Build the Docker image
-  with `-e VAKBROWSE_BACKEND=dom` to run the REST server entirely chrome-free.
+  `{"options":{"backend":"dom"}}`).
+- **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
+  dual-backend support (CDP screenshots and pure-Rust DOM live rendering with
+  `<base href>` resolution), batch studio, console REPL, cookie manager, and
+  tour guide.
 
-101 tests, clippy clean. Hardened against real environments: launch args verified
+115 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):
