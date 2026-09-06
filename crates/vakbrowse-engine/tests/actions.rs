@@ -286,9 +286,13 @@ async fn cookies_set_get_roundtrip() {
         .await
         .unwrap();
 
+    // Navigate to a real HTTP origin so document.cookie has a working cookie
+    // jar (about:blank is opaque and returns [object Object] for the cookie
+    // getter in recent Chrome builds).
+    session.navigate("https://example.com").await.unwrap();
+
     // Set a cookie visible to this page's origin via document.cookie, so we
-    // can read it back through the page (CDP GetCookies is origin-scoped and
-    // file:// exposes no cookie jar — so we verify the set path through JS).
+    // can read it back through the page (CDP GetCookies is origin-scoped).
     session
         .eval_text("document.cookie = 'session=test123';")
         .await

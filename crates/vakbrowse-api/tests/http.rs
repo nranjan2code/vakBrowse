@@ -90,14 +90,16 @@ async fn health_and_open_snapshot_close_over_http() {
     assert!(elements.iter().any(|e| e["role"] == "link"));
 
     // Policy-free manager allows navigation anywhere.
-    // DNS/engine failure surfaces as an Error payload mapped to 400.
+    // DNS/engine failure (`.invalid` TLD never resolves) surfaces as an
+    // Error payload mapped to 502 — a transient gateway error the agent
+    // may retry, not a 400 bad-request.
     let resp = client
         .post(format!("{base}/sessions/{session}/actions"))
         .json(&json!({ "type": "navigate", "url": "https://blocked.invalid/" }))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 502);
     let body: Value = resp.json().await.unwrap();
     assert!(
         body["Ok"]["Error"].is_object(),
