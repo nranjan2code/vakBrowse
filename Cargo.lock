@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-api"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "futures",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-cli"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-core"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2546,7 +2546,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-dom"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "quick-js",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-engine"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2582,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-ffi"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "tokio",
@@ -2592,7 +2592,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-mcp"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "rmcp",
  "serde_json",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-perception"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "vakbrowse-core",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-server"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "dirs",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "vakbrowse-stealth"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "vakbrowse-core",
@@ -2641,10 +2641,11 @@ dependencies = [
 
 [[package]]
 name = "vakd"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "tokio",
+ "tracing",
  "tracing-subscriber",
  "vakbrowse-core",
  "vakbrowse-engine",

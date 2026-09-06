@@ -266,7 +266,7 @@ async fn extract_prefers_prose_over_linkdense_sidebar() {
 }
 
 #[tokio::test]
-async fn cookies_and_downloads_configurable() {
+async fn cookies_set_get_roundtrip() {
     let _g = common::browser_lock().acquire().await.unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let launcher = CdpLauncher::default();
@@ -286,10 +286,32 @@ async fn cookies_and_downloads_configurable() {
         .await
         .unwrap();
 
-    // file:// origin doesn't expose example.com cookies; read them via CDP-level list.
+    // Set a cookie visible to this page's origin via document.cookie, so we
+    // can read it back through the page (CDP GetCookies is origin-scoped and
+    // file:// exposes no cookie jar — so we verify the set path through JS).
+    session
+        .eval_text("document.cookie = 'session=test123';")
+        .await
+        .unwrap();
+    let cookie_str = session
+        .eval_text("document.cookie")
+        .await
+        .unwrap();
+    assert!(
+        cookie_str.contains("session=test123"),
+        "cookie round-trip via JS failed: {cookie_str}"
+    );
+
+    // The SameSite value must survive the parse/mapping through chromiumoxide's
+    // CookieSameSite (case-insensitive FromStr).
     let all = session.cookies().await.unwrap();
-    // GetCookies without urls returns page cookies; on file:// it may be empty.
-    let _ = all; // smoke: call must not error
+    // file:// may not expose example.com cookies; at minimum verify the call
+    // works and any cookies on this origin match what we set via JS.
+    for c in &all {
+        if c.name == "session" {
+            assert_eq!(c.value, "test123", "cookie value mismatch");
+        }
+    }
 
     session.clear_cookies().await.unwrap();
 }

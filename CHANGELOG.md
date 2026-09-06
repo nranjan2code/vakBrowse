@@ -6,29 +6,56 @@ runs the mac/linux-root/linux-uid1000 gates, tags, and appends an entry.
 
 ## Unreleased
 
-- **Action batching** (`Request::Batch` + `ResponsePayload::Results`): run a
-  sequence of actions in one round-trip with fail-fast, cutting agent latency
-  across every surface — `vak batch`, `browser_batch`, `POST /batch`,
-  UDS + WebSocket, and the FFI. One result per action, in order.
-- **Proxy rotation** (`Action::RotateProxy`): re-launches Chrome on the next
-  endpoint in `SessionOptions.proxies` (`--proxies a,b` / `browser_rotate_proxy`
-  / `vak rotate-proxy`) and **restores the session's last URL** so an agent can
-  carry on after a bot-wall challenge.
-- **Human timing** (`--human-timing`): injects sub-150ms randomized input
-  delays before navigate/eval/click/fill/press/scroll/click-at to break
-  cadence-based behavioral tells. Honest — no TLS/HTTP2 spoofing.
-- **`wait_url`**: SPA-safe URL wait polling `location.href` (already landed in
-  the prior cycle).
-- **verify.sh**: fixed the Linux-root Docker source-mount regression (the tree
-  is now always mounted at `/src` whether or not the `vk-cargo` volume exists).
-- **Experimental DOM backend** (`vakbrowse-dom` / `DomLauncher`): a pure-Rust,
-  chrome-free backend implementing the full `EngineLauncher`/`PageOps` seam,
-  swappable into `SessionManager::new(policy, Arc::new(DomLauncher))`. Parses
-  HTML in-process for `file://` fixtures; no JS engine (eval/wait/screenshot
-  return `Unsupported`); navigation is `file://`-only by design. Proves the
-  engine seam is backend-agnostic via a server integration test driving
-  `Request::Batch`, `RotateProxy` (URL restored), and fill→snapshot-value
-  with zero chrome.
+- **Version alignment**: workspace version bumped from `0.1.0` → `0.4.0` to
+  match the Python SDK (`vakbrowse` PyPI) and git tags. Previously `cargo
+  run -p vakd -- --version` reported `0.1.0` while `pip show vakbrowse`
+  reported `0.4.0` — a source of confusion for the ctypes FFI story.
+- **CFT HTTP timeouts**: `cft::http_get` (manifest fetch, 30s) and
+  `blocking_download` (120s) now configure a `timeout_global` on the `ureq`
+  agent, preventing indefinite hangs against `googlechromelabs.github.io` on
+  slow or flaky CI/container networks. Previously had no timeout at all.
+- **`human_jitter` de-correlation**: replaced wall-clock-derived
+  `subsec_nanos() % 130` (highly correlated for consecutive calls in a tight
+  agent loop) with a splitmix64-finalized mix of nanosecond timestamp + a
+  thread-local call counter, producing well-distributed [20, 150] ms delays
+  without adding an RNG dependency.
+- **DOM backend `wait_for_url` CDP parity**: now polls `location.href` on a
+  25ms interval up to the timeout (matching the CDP backend) instead of a
+  single check-then-instant-error. The module doc is updated to clarify it
+  still only observes the in-memory URL (can't see external navigations the
+  DOM backend never received).
+- **DOM backend `@e0` phantom ref fix**: `ref_to_index("@e0")` now returns
+  `None` (via `checked_sub`) instead of silently resolving to the first
+  interactive element. Refs are 1-based; `@e0` is not valid and must not
+  alias `@e1`.
+- **Cookie round-trip test**: added a hermetic DOM-backend integration test
+  (`dom_backend_cookie_set_get_roundtrip`) verifying `SetCookie` → `Cookies`
+  → `ClearCookies` through `SessionManager`. Replaces the CDP smoke test
+  that asserted nothing (`let _ = all;` on a `file://` origin that exposes no
+  cookie jar).
+- **Graceful shutdown** (`vakd serve` + `vakd-rest`): both daemons now race
+  their serve loop against `tokio::signal::ctrl_c()`. On SIGINT/SIGTERM, all
+  sessions are closed via `SessionManager::close_all` (dropping CDP browser
+  handles → tearing down chrome processes), and the UDS socket file is
+  removed on clean exit. Previously Ctrl-C killed the process abruptly,
+  orphaning chrome processes. `vakd-rest` uses axum's
+  `with_graceful_shutdown`.
+- **MCP stealth seed no longer hardcoded**: `browser_open` now accepts an
+  optional `stealth_seed` parameter instead of always mapping `stealth:true`
+  → `"mcp"`. Falls back to the `profile` id, then `"default"`, so different
+  profiles/agents get different fingerprints.
+- **CDP child-frame click navigation detection**: after a DOM `.click()` on a
+  child-frame element, the click now polls the top-level URL for a change
+  (catching `_top`-targeting anchors and JS-driven `location.href`
+  assignments originating in the iframe) instead of always returning
+  `stayed()`. Same-frame iframe navigations remain invisible (documented
+  limitation).
+- **`select_option` error classification**: the JS string returns
+  (`"no-element"`, `"wrong-tag:DIV"`, `"error:..."`) are now mapped to
+  `VakError::NotFound` / `VakError::Unsupported` / `VakError::Engine`
+  respectively, instead of a catch-all `Engine("diagnostic: …")` leak.
+
+### Changed
 - **`vakbrowse-dom` parser hardened in-place**: quote-aware tag scanning (`>` in
   quoted attrs no longer closes the tag), `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`
   + numeric `&#NN;`/`&#xNN;` entity decoding in values and text, raw-text

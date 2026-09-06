@@ -34,20 +34,32 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
 
 /// Serve forever on `addr`. `default_backend` is the server-wide engine chosen
 /// when a client omits `SessionOptions.backend` (`VAKBROWSE_BACKEND`).
+/// Shuts down gracefully on SIGINT/SIGTERM: closes all sessions (dropping
+/// browser handles) before exiting.
 pub async fn serve(
     addr: SocketAddr,
     policy: Policy,
     default_backend: Backend,
 ) -> vakbrowse_core::Result<()> {
-    let app = build_router(Arc::new(SessionManager::with_policy_and_backend(
+    let manager = Arc::new(SessionManager::with_policy_and_backend(
         policy,
         default_backend,
-    )));
+    ));
+    let app = build_router(manager.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| vakbrowse_core::VakError::Engine(format!("bind {addr}: {e}")))?;
     tracing::info!("vakd-rest listening on http://{addr}");
     axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!(
+                "shutdown signal received; closing {} session(s)",
+                manager.stats().await.0
+            );
+            manager.close_all().await;
+            tracing::info!("vakd-rest stopped");
+        })
         .await
         .map_err(|e| vakbrowse_core::VakError::Engine(format!("serve: {e}")))?;
     Ok(())

@@ -634,6 +634,20 @@ impl SessionManager {
         Ok(removed)
     }
 
+    /// Close **all** live sessions. Called on daemon shutdown so that CDP
+    /// browser handles (and their chrome processes) are dropped cleanly
+    /// rather than orphaned. Each `ManagedSession` drop tears down its
+    /// `CdpSession`, which drops the `Browser` handle and closes chrome.
+    pub async fn close_all(&self) {
+        let all: Vec<SessionId> = self.sessions.lock().await.keys().cloned().collect();
+        for id in all {
+            tracing::info!(%id, "closing session on shutdown");
+            if let Err(e) = self.close(&id).await {
+                tracing::warn!(%id, error = %e, "error closing session during shutdown");
+            }
+        }
+    }
+
     pub async fn list(&self) -> Vec<SessionInfo> {
         self.sessions
             .lock()

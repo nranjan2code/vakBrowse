@@ -77,7 +77,9 @@ MCP client config (Claude Code / Cursor / opencode):
 
 Optional env: `VAKBROWSE_ALLOW_PREFIXES=https://a.com,https://b.com` (URL
 allowlist for the MCP surface). `VAKBROWSE_HTTP_PORT` (default 7788) for
-`vakd-rest`.
+`vakd-rest`. Both `vakd serve` (UDS) and `vakd-rest` (HTTP) now shut down
+gracefully on SIGINT/SIGTERM: all sessions are closed (dropping browser
+handles) and the UDS socket file is removed before exit.
 
 Embedding from Python (no daemon needed — library owns its runtime):
 
@@ -135,13 +137,22 @@ Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **101 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **103 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean. New chrome-launching server tests are guarded by
   `browser_lock()` (serialized per test binary); the experimental `vakbrowse-dom`
   backend adds chrome-free coverage of the wire model (policy gate + Batch
   fail-fast surfacing a classified `ServiceError` kind) via
   `SessionManager::new(policy, Arc::new(DomLauncher))` — exactly the
   wire-model guarantee `vakd doctor` does not currently cover.
+- Fixes: workspace version aligned to `0.4.0` (was `0.1.0`); CFT HTTP downloads
+  now have a 30s (manifest) / 120s (binary) timeout (previously unbounded);
+  `human_jitter` uses a splitmix64-mixed timestamp+counter (no longer
+  `subsec_nanos % 130`, which was correlated in tight agent loops); DOM
+  `wait_for_url` polls with CDP parity (was a single check → instant Timeout);
+  DOM `ref_to_index("@e0")` now returns `None` (was `Some(0)`, aliasing `@e1`).
+- Cookie round-trip test added via the DOM backend (hermetic `SetCookie` →
+  `Cookies` → `ClearCookies` through `SessionManager`), replacing the CDP
+  smoke test that asserted nothing.
   `./scripts/release.sh` bakes the pinned engine (`vakd doctor --no-probe`),
   runs all three gates, tags, and appends to `CHANGELOG.md`.
 - Reproducible gates (GH Actions is intentionally disabled — see Golden Rule #6):
@@ -303,14 +314,19 @@ bins/
   `element.click()` — the browser stays on the SERP. Agent recipe: prefer
   Wikipedia/example.com for search+click-through proofs; treat Bing/DDG as
   known behavioral limits, not defects. Stealth (`vak open --stealth`,
-  `browser_open {stealth:true}`, seed via `stealth_seed`) defeats
-  webdriver/plugin/pointer tells but NOT TLS-fingerprint or behavioral-nav walls.
+  `browser_open {stealth:true, stealth_seed:"..."}`, seed via `stealth_seed`)
+  defeats webdriver/plugin/pointer tells but NOT TLS-fingerprint or
+  behavioral-nav walls. MCP `browser_open` accepts an optional `stealth_seed`
+  param (falls back to the `profile` id, then `"default"`).
 - Sessions own a TAB REGISTRY (`tabs/new_tab/switch_tab/close_tab`); refs are
   per-tab. Snapshots merge AX trees across the frame tree (frame-prefixed ids
   `f0:` root, `f1:` …). Cross-frame clicks fire real DOM clicks on the
   resolved element because child-frame box coords are frame-relative —
-  trusted mouse events apply to root-frame elements only today. OOPIF frames
-  that reject frame-scoped CDP commands are skipped, not fatal. file://
+  trusted mouse events apply to root-frame elements only today. Child-frame
+  clicks dispatch a DOM `.click()` on the resolved element and then poll the
+  top-level URL for a change (catches `_top`-targeting anchors + JS-driven
+  `location.href`); same-frame iframe navigations remain invisible. OOPIF
+  frames that reject frame-scoped CDP commands are skipped, not fatal. file://
   iframes are unique-origin: they cannot navigate `_top`; test signals must
   stay inside the frame.
 - chromiumoxide v0.9.x is tokio-only; ureq v3 API (`into_body().into_reader()`),

@@ -350,8 +350,9 @@ impl CdpSession {
     }
 
     /// Break robotic input cadence when `human_timing` is enabled. Off by
-    /// default so non-agent callers see no slowdown. Uses wall-clock jitter
-    /// (no `rand` dependency) — timing, not secrets.
+    /// default so non-agent callers see no slowdown. Uses a splitmix64-mixed
+    /// timestamp + per-thread counter for de-correlated jitter — timing, not
+    /// secrets.
     async fn maybe_human_jitter(&self) {
         if self.human_timing {
             tokio::time::sleep(human_jitter()).await;
@@ -1045,11 +1046,23 @@ impl PageOps for CdpSession {
                 Ok(ClickResult::stayed())
             };
         }
-        // Child frames: DOM click on the resolved element.
+        // Child frames: DOM click on the resolved element. We can't dispatch
+        // trusted mouse events to child frames (box coords are frame-relative),
+        // but a DOM `.click()` fires the element's handlers. After it fires,
+        // check for a top-level URL change — this catches `_top`-targeting
+        // anchors and JS-driven `location.href` assignments that originate in
+        // the iframe. Same-frame iframe navigations (the iframe's URL changes
+        // but the top-level URL does not) remain invisible — a documented
+        // limitation, since detecting them would require per-frame URL queries.
+        let page = self.tab().page.clone();
+        let before = page.url().await.map_err(proto_err)?.unwrap_or_default();
         let ok = self
             .call_on_element(backend, FRAME_CLICK_JS, vec![])
             .await?;
         let _ = ok;
+        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_NAV_TIMEOUT).await {
+            return self.reconcile_click_navigation(url).await;
+        }
         Ok(ClickResult::stayed())
     }
 
@@ -1068,8 +1081,23 @@ impl PageOps for CdpSession {
             .await?;
         match out {
             serde_json::Value::Bool(v) => Ok(v),
+            serde_json::Value::String(s) => {
+                if s == "no-element" {
+                    Err(VakError::NotFound(format!("select_option: stale ref {r}")))
+                } else if let Some(tag) = s.strip_prefix("wrong-tag:") {
+                    Err(VakError::Unsupported(format!(
+                        "select_option expects a <select>, got <{tag}> (ref {r})"
+                    )))
+                } else if let Some(msg) = s.strip_prefix("error:") {
+                    Err(VakError::Engine(format!("select_option: JS error: {msg}")))
+                } else {
+                    Err(VakError::Engine(format!(
+                        "select_option: unexpected JS return: {s}"
+                    )))
+                }
+            }
             other => Err(VakError::Engine(format!(
-                "select_option diagnostic: {other}"
+                "select_option: unexpected JS return type: {other}"
             ))),
         }
     }
@@ -1482,17 +1510,40 @@ impl PageOps for CdpSession {
     }
 }
 
-/// Wall-clock jitter in [20, 150) ms used by `human_timing` to break the
-/// robotic cadence agents otherwise expose. No RNG dependency: derive from
-/// the current second-fraction nanosecond. Not cryptographically secret.
+/// Wall-clock jitter in [20, 150] ms used by `human_timing` to break the
+/// robotic cadence agents otherwise expose.
+///
+/// The old implementation derived the delay from `subsec_nanos() % 130`, which
+/// is wall-clock-derived and highly correlated for consecutive calls in a tight
+/// agent loop (the nanosecond field advances linearly, so the modulo cycles
+/// through a predictable sequence). This version mixes a high-resolution
+/// timestamp with a thread-local call counter through a splitmix-style
+/// finalizer, producing well-distributed, less-correlated delays — no RNG
+/// dependency required. Timing is not cryptographically secret.
 fn human_jitter() -> std::time::Duration {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
+    thread_local! {
+        static COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let ms = 20 + (nanos % 130);
-    std::time::Duration::from_millis(ms as u64)
+    let counter = COUNTER.with(|c| {
+        let v = c.get();
+        c.set(v.wrapping_add(1));
+        v
+    });
+    // Splitmix64 finalizer: spreads input entropy across all 64 bits.
+    let mut s = now.wrapping_add(counter);
+    s = s.wrapping_mul(0x9e3779b97f4a7c15);
+    s ^= s >> 30;
+    s = s.wrapping_mul(0xbf58476d1ce4e5b9);
+    s ^= s >> 27;
+    s = s.wrapping_mul(0x94d049bb133111eb);
+    s ^= s >> 31;
+    let ms = 20 + (s % 131); // [20, 150]
+    std::time::Duration::from_millis(ms)
 }
 
 impl CdpSession {

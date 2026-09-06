@@ -439,3 +439,85 @@ async fn dom_backend_find_by_css_combinator_and_empty_semantics() {
         "unsupported selector must surface an error: {bad:?}"
     );
 }
+
+/// Cookie round-trip through the `DomLauncher` wire model: `Action::SetCookie`
+/// → `Action::Cookies` must echo back the set cookie. This closes the gap
+/// where the only cookie test was a CDP smoke test that asserted nothing (it
+/// couldn't, on `file://` origins) — here the DOM backend's in-memory cookie
+/// jar makes the round-trip hermetically verifiable through `SessionManager`.
+#[tokio::test]
+async fn dom_backend_cookie_set_get_roundtrip() {
+    let manager = dom_manager();
+    let opened = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("form.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .expect("open");
+    let session = match opened {
+        ResponsePayload::Opened(info) => info.id,
+        other => panic!("{other:?}"),
+    };
+
+    manager
+        .act(
+            &session,
+            Action::SetCookie {
+                cookie: vakbrowse_core::CookieInput {
+                    name: "session".into(),
+                    value: "abc123".into(),
+                    domain: "localhost".into(),
+                    path: "/".into(),
+                    secure: false,
+                    http_only: true,
+                    same_site: Some("Strict".into()),
+                },
+            },
+        )
+        .await
+        .expect("set_cookie");
+
+    let got = manager
+        .act(&session, Action::Cookies)
+        .await
+        .expect("cookies");
+    match got {
+        ActionResult::Cookies { cookies } => {
+            let c = cookies
+                .iter()
+                .find(|c| c.name == "session")
+                .unwrap_or_else(|| panic!("session cookie not persisted: {cookies:?}"));
+            assert_eq!(c.value, "abc123", "cookie value mismatch");
+            assert_eq!(c.path, "/", "cookie path mismatch");
+            // SameSite must survive the round-trip.
+            assert_eq!(
+                c.same_site.as_deref(),
+                Some("Strict"),
+                "same_site must survive round-trip"
+            );
+        }
+        other => panic!("expected Cookies, got {other:?}"),
+    }
+
+    // Clearing removes it.
+    manager
+        .act(&session, Action::ClearCookies)
+        .await
+        .expect("clear_cookies");
+    let empty = manager
+        .act(&session, Action::Cookies)
+        .await
+        .expect("cookies after clear");
+    match empty {
+        ActionResult::Cookies { cookies } => {
+            assert!(
+                !cookies.iter().any(|c| c.name == "session"),
+                "cookie not cleared: {cookies:?}"
+            );
+        }
+        other => panic!("expected Cookies, got {other:?}"),
+    }
+}

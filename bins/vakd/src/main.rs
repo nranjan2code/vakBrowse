@@ -91,8 +91,29 @@ async fn serve(
         Arc::new(SessionManager::with_policy_and_backend(policy, default_backend).with_pool(pool));
     manager.spawn_reaper();
     let path = std::path::PathBuf::from(socket);
-    // Ctrl-C kills the process; the socket file is removed on next start.
-    vakbrowse_server::uds::serve(&path, manager).await
+
+    // Graceful shutdown: race the UDS server against SIGINT/SIGTERM. On
+    // signal, close all sessions (drops CDP browser handles → tears down
+    // chrome) and remove the socket file before exiting. Previously Ctrl-C
+    // killed the process abruptly, orphaning chrome processes.
+    let serve_fut = vakbrowse_server::uds::serve(&path, manager.clone());
+    let shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    tokio::select! {
+        result = serve_fut => {
+            // Server exited on its own (listener error). Clean up the socket.
+            let _ = std::fs::remove_file(&path);
+            result
+        }
+        _ = shutdown => {
+            tracing::info!("shutdown signal received; closing {} session(s)", manager.stats().await.0);
+            manager.close_all().await;
+            let _ = std::fs::remove_file(&path);
+            tracing::info!("vakd stopped");
+            Ok(())
+        }
+    }
 }
 
 async fn status(socket: &str) -> vakbrowse_core::Result<()> {

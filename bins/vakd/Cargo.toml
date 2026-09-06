@@ -15,4 +15,5 @@ vakbrowse-engine = { workspace = true }
 vakbrowse-server = { workspace = true }
 tokio = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

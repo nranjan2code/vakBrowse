@@ -64,6 +64,10 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                         json!({"type": "boolean", "description": "launch with a stealth fingerprint for bot-walled sites"}),
                     ),
                     (
+                        "stealth_seed",
+                        json!({"type": "string", "description": "deterministic fingerprint seed for stealth mode (defaults to the profile id or 'default'); pass a distinct string per identity/agent so MCP sessions don't all share the same fingerprint"}),
+                    ),
+                    (
                         "proxy",
                         json!({"type": "string", "description": "proxy for this session, e.g. http://user:pass@host:port or socks5://host:port"}),
                     ),
@@ -445,10 +449,28 @@ impl VakMcp {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                     url: arg(args, "url").and_then(|v| v.as_str()).map(String::from),
-                    stealth_seed: arg(args, "stealth")
-                        .and_then(|v| v.as_bool())
-                        .filter(|b| *b)
-                        .map(|_| "mcp".to_string()),
+                    stealth_seed: {
+                        // Prefer an explicit seed; fall back to the profile id
+                        // (matches CLI behavior), then a default. Previously
+                        // this was hardcoded to "mcp" — every MCP stealth
+                        // session got the *same* fingerprint.
+                        if arg(args, "stealth")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            arg(args, "stealth_seed")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                                .or_else(|| {
+                                    arg(args, "profile")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from)
+                                })
+                                .or_else(|| Some("default".to_string()))
+                        } else {
+                            None
+                        }
+                    },
                     proxy: arg(args, "proxy")
                         .and_then(|v| v.as_str())
                         .map(String::from),

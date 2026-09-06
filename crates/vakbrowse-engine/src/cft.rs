@@ -217,7 +217,15 @@ fn pick_entry<'m>(config: &CftConfig, manifest: &'m Manifest) -> Result<&'m Chan
 }
 
 fn blocking_download(url: String) -> Result<Vec<u8>> {
-    let resp = ureq::get(&url)
+    // 120s global timeout: allows for slow CI / container networks but won't
+    // hang forever if googlechromelabs.github.io is unreachable.
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .build(),
+    );
+    let resp = agent
+        .get(&url)
         .call()
         .map_err(|e| VakError::Http(format!("{url}: {e}")))?;
     let len = resp
@@ -283,7 +291,14 @@ async fn download_and_extract(
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>> {
-    let resp = ureq::get(url)
+    // 30s global timeout: the manifest is small and should arrive quickly.
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build(),
+    );
+    let resp = agent
+        .get(url)
         .call()
         .map_err(|e| VakError::Http(format!("{url}: {e}")))?;
     let mut buf = Vec::new();

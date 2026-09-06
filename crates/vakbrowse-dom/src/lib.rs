@@ -11,7 +11,9 @@
 //! - Form submit via JS event handlers: NOT supported (fills the field but
 //!   never fires handlers). Use the CDP backend for that.
 //! - `eval_text` / `wait_for_truthy` / `wait_for_url` by JS: unsupported
-//!   (wait_for_url checks the in-memory `location.href` only).
+//!   (wait_for_url polls `location.href` with the timeout, CDP parity — but
+//!   only the in-memory URL, so it cannot observe an external navigation that
+//!   the DOM backend never received).
 //! - `screenshot` / `click_at` / WebMCP / multi-tab: unsupported.
 //!
 //! Use it to drive the seam: `SessionManager::new(policy, Arc::new(DomLauncher))`.
@@ -887,14 +889,20 @@ impl PageOps for DomPage {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
-    async fn wait_for_url(&self, pattern: &str, _timeout_ms: u64) -> Result<()> {
-        if self.url.contains(pattern) {
-            Ok(())
-        } else {
-            Err(VakError::Timeout(format!(
-                "wait_for_url: {pattern} (href={})",
-                self.url
-            )))
+    async fn wait_for_url(&self, pattern: &str, timeout_ms: u64) -> Result<()> {
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if self.url.contains(pattern) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(VakError::Timeout(format!(
+                    "wait_for_url: {pattern} (href={})",
+                    self.url
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
     async fn cookies(&self) -> Result<Vec<Cookie>> {
@@ -980,9 +988,11 @@ fn find_by_index<'a>(n: &'a mut Node, target: usize, seen: &mut usize) -> Option
 }
 
 /// Resolve an `@eN` ref to the 0-based interactive-element index.
+/// Returns `None` for invalid refs including `@e0` (refs are 1-based; the old
+/// `saturating_sub` silently mapped `@e0` to index 0 = the first element).
 fn ref_to_index(refstr: &str) -> Option<usize> {
     let n: usize = refstr.trim_start_matches("@e").parse().ok()?;
-    Some(n.saturating_sub(1))
+    n.checked_sub(1)
 }
 
 /// First mutable descendant (in `snapshot`'s order) at a given `@eN` index.
@@ -1122,7 +1132,35 @@ mod tests {
             .await
             .unwrap();
         assert!(page.wait_for_url("form.html", 1000).await.is_ok());
-        assert!(page.wait_for_url("nope_not_here", 50).await.is_err());
+        // Non-matching pattern must time out (polls, doesn't return instantly
+        // as the old single-check did).
+        let err = page
+            .wait_for_url("nope_not_here", 50)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VakError::Timeout(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn ref_e0_is_rejected_not_first_element() {
+        let mut page = DomPage::new();
+        page.load("file:///tmp/form.html", Some(form_html()))
+            .await
+            .unwrap();
+        let snap = page.snapshot().await.unwrap();
+        let first = &snap.elements[0];
+        // @e0 is not a valid ref (refs are 1-based); clicking it must NOT
+        // silently target the first element.
+        let r0 = ElementRef::new("@e0");
+        let r1 = first.r#ref.clone();
+        // ref_to_index("@e0") => None => click is a no-op (stayed).
+        let out = page.click(&r0).await.unwrap();
+        assert!(
+            matches!(out, ClickResult { navigated: false, url: None }),
+            "@e0 must not navigate, got {out:?}"
+        );
+        // And @e0 does not equal @e1 (the first element).
+        assert_ne!(r0, r1, "@e0 must not alias the first real ref");
     }
 
     // --- Real-JS (QuickJS) backend tests: chrome-free execution ---
