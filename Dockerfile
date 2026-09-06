@@ -11,7 +11,7 @@ RUN NODE_ENV=production npm run build  # outputs to ../static (playground/static
 # ---- build ----
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY --from=frontend /playground/static /src/playground/static
+COPY --from=frontend /static /src/playground/static
 COPY . .
 RUN cargo build --release -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse-mcp -p vakbrowse-ffi \
       --features vakbrowse-server/dom-backend,vakbrowse-api/playground \
@@ -34,6 +34,6 @@ COPY --from=build /src/target/release/vak        /usr/local/bin/
 COPY --from=build /src/target/release/libvakbrowse_ffi.so /usr/local/lib/
 COPY --from=build /src/playground/static /playground
 COPY --from=build /root/.cache/vakbrowse         /root/.cache/vakbrowse
-ENV VAKBROWSE_HTTP_PORT=7788 VAKBROWSE_PLAYGROUND_DIR=/playground
+ENV VAKBROWSE_HTTP_HOST=0.0.0.0 VAKBROWSE_HTTP_PORT=7788 VAKBROWSE_PLAYGROUND_DIR=/playground
 EXPOSE 7788
 CMD ["vakd-rest"]

@@ -26,6 +26,10 @@ async fn main() -> vakbrowse_core::Result<()> {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(7788);
+    let bind_host = std::env::var("VAKBROWSE_HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let addr: SocketAddr = format!("{bind_host}:{port}")
+        .parse()
+        .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
     let policy = Policy {
         url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
             .unwrap_or_default()
@@ -39,7 +43,7 @@ async fn main() -> vakbrowse_core::Result<()> {
         .unwrap_or(Backend::Cdp);
 
     serve(
-        SocketAddr::from(([127, 0, 0, 1], port)),
+        addr,
         policy,
         default_backend,
     )
