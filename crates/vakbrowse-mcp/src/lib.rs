@@ -79,10 +79,6 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                         "human_timing",
                         json!({"type":"boolean","description":"inject randomized delays before input actions to mask robotic cadence"}),
                     ),
-                    (
-                        "backend",
-                        json!({"type":"string","enum":["cdp","dom"],"description":"engine backend: cdp (default, Chrome) or dom (experimental pure-Rust QuickJS, no Chrome process)"}),
-                    ),
                 ],
                 &[],
             ),
@@ -412,6 +408,44 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             "List completed downloads in the session's download directory.",
             schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
         ),
+        Tool::new(
+            "browser_cookies",
+            "List cookies stored in the session's browser context.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_set_cookie",
+            "Set a cookie in the session's browser context.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("name", json!({"type": "string", "description": "cookie name"})),
+                    ("value", json!({"type": "string", "description": "cookie value"})),
+                    ("domain", json!({"type": "string", "description": "cookie domain"})),
+                    ("path", json!({"type": "string", "description": "cookie path (default /)"})),
+                    ("secure", json!({"type": "boolean", "description": "secure flag"})),
+                    ("http_only", json!({"type": "boolean", "description": "httpOnly flag"})),
+                    ("same_site", json!({"type": "string", "description": "Strict, Lax, or None"})),
+                ],
+                &["session", "name", "value", "domain"],
+            ),
+        ),
+        Tool::new(
+            "browser_clear_cookies",
+            "Clear all cookies stored in the session's browser context.",
+            schema(vec![("session", json!({"type": "string", "description": SESSION}))], &["session"]),
+        ),
+        Tool::new(
+            "browser_set_download_dir",
+            "Set the download directory path for the session.",
+            schema(
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    ("dir", json!({"type": "string", "description": "directory path"})),
+                ],
+                &["session", "dir"],
+            ),
+        ),
     ]
 }
 
@@ -517,17 +551,6 @@ impl VakMcp {
                     human_timing: arg(args, "human_timing")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
-                    backend: match arg(args, "backend").and_then(|v| v.as_str()) {
-                        None => None,
-                        Some("dom") => Some(vakbrowse_server::Backend::Dom),
-                        Some("cdp") => Some(vakbrowse_server::Backend::Cdp),
-                        Some(other) => {
-                            return Err(McpError::invalid_params(
-                                format!("unknown backend `{other}` (use cdp|dom)"),
-                                None,
-                            ));
-                        }
-                    },
                 },
             },
             "browser_close" => Request::Close {
@@ -708,6 +731,43 @@ impl VakMcp {
             "browser_downloads" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),
                 action: Action::Downloads,
+            },
+            "browser_cookies" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::Cookies,
+            },
+            "browser_set_cookie" => {
+                let name = arg_str(args, "name")?;
+                let value = arg_str(args, "value")?;
+                let domain = arg_str(args, "domain")?;
+                let path = arg(args, "path").and_then(|v| v.as_str()).unwrap_or("/").to_string();
+                let secure = arg(args, "secure").and_then(|v| v.as_bool()).unwrap_or(false);
+                let http_only = arg(args, "http_only").and_then(|v| v.as_bool()).unwrap_or(false);
+                let same_site = arg(args, "same_site").and_then(|v| v.as_str()).map(String::from);
+                Request::Act {
+                    session: SessionId(arg_str(args, "session")?),
+                    action: Action::SetCookie {
+                        cookie: vakbrowse_core::CookieInput {
+                            name,
+                            value,
+                            domain,
+                            path,
+                            secure,
+                            http_only,
+                            same_site,
+                        },
+                    },
+                }
+            }
+            "browser_clear_cookies" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::ClearCookies,
+            },
+            "browser_set_download_dir" => Request::Act {
+                session: SessionId(arg_str(args, "session")?),
+                action: Action::SetDownloadDir {
+                    dir: arg_str(args, "dir")?,
+                },
             },
             "browser_batch" => {
                 let actions_val = arg(args, "actions").ok_or_else(|| {

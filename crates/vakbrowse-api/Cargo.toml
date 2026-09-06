@@ -24,7 +24,6 @@ default = []
 # Adds playground UI serving at /playground. The React frontend is built to
 # playground/static/ and served from disk by vakd-rest.
 playground = ["dep:mime_guess"]
-dom-backend = ["vakbrowse-server/dom-backend"]
 
 [dependencies.mime_guess]
 version = "2"

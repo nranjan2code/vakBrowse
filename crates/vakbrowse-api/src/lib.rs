@@ -20,9 +20,7 @@ use axum::response::Response as AxResponse;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use vakbrowse_core::SessionId;
-use vakbrowse_server::{
-    Backend, Policy, Request, Response, ResponsePayload, ServiceError, SessionManager,
-};
+use vakbrowse_server::{Policy, Request, Response, ResponsePayload, ServiceError, SessionManager};
 
 #[derive(Clone)]
 struct ApiState {
@@ -69,19 +67,14 @@ fn playground_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../playground/static"))
 }
 
-/// Serve forever on `addr`. `default_backend` is the server-wide engine chosen
-/// when a client omits `SessionOptions.backend` (`VAKBROWSE_BACKEND`).
+/// Serve forever on `addr`. CDP (Chrome) is the only engine backend.
 /// Shuts down gracefully on SIGINT/SIGTERM: closes all sessions (dropping
 /// browser handles) before exiting.
 pub async fn serve(
     addr: SocketAddr,
     policy: Policy,
-    default_backend: Backend,
 ) -> vakbrowse_core::Result<()> {
-    let manager = Arc::new(SessionManager::with_policy_and_backend(
-        policy,
-        default_backend,
-    ));
+    let manager = Arc::new(SessionManager::with_policy(policy));
     let app = build_router(manager.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await

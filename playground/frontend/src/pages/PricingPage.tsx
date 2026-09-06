@@ -43,7 +43,7 @@ export function PricingPage({ onNavigate }: PricingPageProps) {
             <ul className="space-y-2 text-xs font-mono text-text-dim pt-4 border-t border-border">
               <li className="flex items-center gap-2">
                 <span className="text-emerald-400">✓</span>
-                <span>Full CDP + DOM-QuickJS Backends</span>
+                <span>Full CDP (Chromium) Engine</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="text-emerald-400">✓</span>
@@ -207,7 +207,7 @@ export function PricingPage({ onNavigate }: PricingPageProps) {
                 <td className="py-2 px-3 text-emerald-400">&lt;500 tokens</td>
               </tr>
               <tr>
-                <td className="py-2 px-3 text-bone">Dual Engine Seam (CDP + DOM/JS)</td>
+                <td className="py-2 px-3 text-bone">CDP Engine (Chromium-for-Testing)</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>

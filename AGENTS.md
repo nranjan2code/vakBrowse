@@ -4,8 +4,8 @@ Instructions for AI agents (and humans) working in this repository.
 
 ## What this is
 
-vakBrowse is an **agent-native browser**: a Rust core that gives AI agents a
-real, scriptable web browser. Humans are optional. All work happens in this
+vakBrowse is an **agent-native browser runtime**: a high-speed Rust core that gives AI agents
+a real, scriptable web browser powered by headless Chromium under the hood. Humans are optional. All work happens in this
 directory (`/Users/nisheethranjan/Projects/vakBrowse`).
 
 ## Golden rules
@@ -14,13 +14,12 @@ directory (`/Users/nisheethranjan/Projects/vakBrowse`).
    `README.md` status sections as part of any phase/feature, not after.
 2. **Engine seam is sacred.** All capabilities go through
    `crates/vakbrowse-engine/src/lib.rs` traits (`EngineLauncher`, `PageOps`).
-   `SessionManager` holds `Arc<dyn EngineLauncher>` (the trait is
-   `#[async_trait]` object-safe) so the daemon/CLI/MCP/API/FFI surfaces are
-   backend-agnostic; the CDP backend lives in `cdp.rs` and is the sole owner of
-   chromiumoxide/CDP types. Swap backends by injecting a launcher via
-   `SessionManager::new(policy, launcher)`; the convenience
-   `SessionManager::with_policy(policy)` uses the CDP launcher. Never leak
-   CDP/chromiumoxide types outside the engine crate.
+   `SessionManager` holds a `CdpLauncher` (implementing `EngineLauncher` via
+   `#[async_trait]`) so the daemon/CLI/MCP/API/FFI surfaces talk to one backend
+   — CDP (chrome-headless-shell) — which lives in `cdp.rs` and is the sole
+   owner of chromiumoxide/CDP types. The trait seam remains so new backends
+   can be plugged into `SessionManager` in future, but the production backend is
+   CDP. Never leak CDP/chromiumoxide types outside the engine crate.
 3. **Sandbox stays on, with automatic fallback.** Chromium's sandbox cannot
    operate as root (CI/Docker) — `cdp.rs` detects uid 0 and opts out with a
    warning. Additionally, hardened runners (GitHub ubuntu images restrict
@@ -160,31 +159,26 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **115 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
-  Linux-uid1000, clippy clean (was 103; +12 from file-upload/source/downloads
-  actions and multi-session concurrency tests, all hermetic via the DOM backend).
+  count is now **73 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
+  `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
-  `browser_lock()` (serialized per test binary); the experimental `vakbrowse-dom`
-  backend adds chrome-free coverage of the wire model (policy gate + Batch
-  fail-fast surfacing a classified `ServiceError` kind) via
-  `SessionManager::new(policy, Arc::new(DomLauncher))` — exactly the
-  wire-model guarantee `vakd doctor` does not currently cover.
+  `browser_lock()` (serialized per test binary) to keep
+  `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
 - Fixes: workspace version aligned to `0.4.0` (was `0.1.0`); CFT HTTP downloads
   now have a 30s (manifest) / 120s (binary) timeout (previously unbounded);
   `human_jitter` uses a splitmix64-mixed timestamp+counter (no longer
-  `subsec_nanos % 130`, which was correlated in tight agent loops); DOM
-  `wait_for_url` polls with CDP parity (was a single check → instant Timeout);
-  DOM `ref_to_index("@e0")` now returns `None` (was `Some(0)`, aliasing `@e1`).
-- Cookie round-trip test added via the DOM backend (hermetic `SetCookie` →
-  `Cookies` → `ClearCookies` through `SessionManager`), replacing the CDP
-  smoke test that asserted nothing.
+  `subsec_nanos % 130`, which was correlated in tight agent loops);
+  `ref_to_index("@e0")` now returns `None` (was `Some(0)`, aliasing `@e1`).
+- Cookie round-trip test added (hermetic `SetCookie` → `Cookies` → `ClearCookies`
+  through `SessionManager`), replacing the CDP smoke test that asserted nothing.
   `./scripts/release.sh` bakes the pinned engine (`vakd doctor --no-probe`),
   runs all three gates, tags, and appends to `CHANGELOG.md`.
 - Reproducible gates (GH Actions is intentionally disabled — see Golden Rule #6):
   `./scripts/verify.sh --mac` (host), `./scripts/verify.sh --root` and
   `./scripts/verify.sh --uid 1000` (linux/amd64 Docker, root + non-root).
-  Every gate now builds with `--features vakbrowse-server/dom-backend` so the
-  experimental DOM backend (`--backend dom`) is exercised alongside CDP.
+  Every gate builds with `--features vakbrowse-api/playground` to exercise the
+  optional playground feature alongside the default workspace.
   `./scripts/setup-hooks.sh` installs a `pre-push` hook that runs the fast
   host gate (`cargo test` + clippy) before every push; the linux gate is
   deliberate (it starts Docker) and is run before cutting a release tag.
@@ -197,31 +191,12 @@ crates/
                         #   bezier mouse paths; consumed by engine LaunchOptions.stealth
   vakbrowse-core        # VakError, ids, Snapshot/Cookie/WebMcpTool wire shapes
   vakbrowse-perception  # AX tree -> compact snapshot w/ stable @eN refs (pure, unit-tested)
-  vakbrowse-engine      # EngineLauncher/PageOps traits; backends:
+  vakbrowse-engine      # EngineLauncher/PageOps traits + CDP backend:
     ├── cft.rs          #   chrome-headless-shell download/pin/cache (Chrome-for-Testing)
     └── cdp.rs          #   CDP backend via chromiumoxide (launch, navigate,
                         #     click/fill/select/press_key/scroll/wait/find_by_css, cookies,
                         #     downloads, WebMCP list/invoke; args passed as
                         #     structured CallArgument via call_on_global)
-  vakbrowse-dom         # Experimental pure-Rust backend: an html5ever-free
-                        #   single-doc DOM tree + embedded QuickJS (on a
-                        #   dedicated OS thread behind an mpsc bridge, since
-                        #   QuickJS ctx is !Send but PageOps: Send) — so it runs
-                        #   real JS with NO chromium process. eval_text,
-                        #   wait_for_truthy, inline <script>, javascript: hrefs,
-                        #   reactive location.href, AND a live document API
-                        #   (getElementById + textContent/value get/set, backed
-                        #   by the shared Arc<RwLock<Node>> so JS writes show
-                        #   up in snapshot/extract/fill). Honest limits: no
-                        #   layout / no network. Event dispatch lives in JS
-                        #   (addEventListener/Event/requestSubmit; quick-js 0.4 is
-                        #   name-only so dispatch runs in-JS, not via
-                        #   call_function). `document.querySelector[s]` resolves CSS
-                        #   to stable @eN refs via a dependency-free matcher
-                        #   (`crates/vakbrowse-dom/src/selector.rs`).
-                        #   Proves the seam is swappable. Opt-in per session via
-                        #   `SessionOptions.backend = "dom"` (feature-gated
-                        #   `dom-backend` on vakbrowse-server; see below).
   vakbrowse-server      # SessionManager, Request/Action/Response model, URL policy,
                         #   ServiceError structured wire errors, snapshot renderer,
                         #   UDS wire protocol (serve + client)
@@ -257,11 +232,10 @@ playground/
   resolved against the current snapshot's element set — immediately
   `click`/`fill`-able, no intermediate snapshot. On CDP the selector is handed
   to `document.querySelectorAll` and matched back to `@eN` via the inverted
-  `ref_to_ax`/`ax_to_backend` tables (so a CSS-found ref == a snapshot ref); on
-  the DOM backend a dependency-free matcher walks interactive elements in
-  snapshot order. Both backends return only refs resolvable in the snapshot
-  (interactive elements); unsupported selectors (dom `:hover`/`+`) are an
-  honest `Unsupported`, not a silent empty set.
+  `ref_to_ax`/`ax_to_backend` tables (so a CSS-found ref == a snapshot ref).
+  Only refs resolvable in the snapshot (interactive elements) are returned;
+  unsupported selectors (`:hover`/`+`) are an honest `Unsupported`, not a
+  silent empty set.
 - Actions use trusted input where it matters: clicks are real
   `Input.dispatchMouseEvent` sequences at box-model centers; fills use the
   native value setter + input/change events (React/Vue-safe). Root-frame
@@ -324,20 +298,6 @@ playground/
   rotation only changes the source IP — it does NOT defeat TLS/HTTP2
   fingerprinting or behavioral biometrics (DDG/Bing/Cloudflare hard-wall even
   under `--stealth` + rotation).
-- `vakbrowse-dom` (pure-Rust backend, `DomLauncher`) proves the engine seam
-  is swappable: it implements `EngineLauncher`/`PageOps` with no Chromium
-  process and embedded QuickJS. Navigation performs real network fetches over
-  **http://** and **https://** via `ureq` (alongside `file://` and `about:`),
-  parses HTML in-process, evaluates inline and interactive JavaScript with
-  embedded QuickJS, dispatches real link click navigations with full WHATWG
-  `url::Url` resolution (handling relative links, root paths, scheme-relative
-  URLs, and in-page hash fragments without 404s), executes `onclick` handlers,
-  delivers unaltered pristine HTML through `source()`, and builds stable
-  `@eN` perception trees. In the playground, live visual previews are rendered
-  via sandboxed HTML frames (`liveHtml` with base-tag resolution loading the
-  site's real native stylesheets and assets). Honest limits: no layout/rasterizer
-  viewport (`screenshot` / `click_at` return `Unsupported`), so visual pixel
-  screenshot streaming requires the CDP backend.
 - Dogfood findings (real web): Wikipedia/GitHub/example.com/HN flows work
   end-to-end: a Wikipedia search -> click result lands on the article; an
   example.com -> click "Learn more" lands on www.iana.org — both proven by
@@ -425,31 +385,10 @@ playground/
 
 Post-roadmap ideas (not committed): WebDriver BiDI backend behind the engine
 trait. DONE in-tree: pip packaging of the FFI (`python/`), proxy rotation
-across endpoint pools (`RotateProxy`), and a non-Chromium experimental
-backend (`vakbrowse-dom`) behind the `EngineLauncher`/`PageOps` seam — proven
-swappable by a server integration test that drives `Request::Batch`,
-`RotateProxy`, and fill→snapshot-value through `DomLauncher` with zero chrome.
+across endpoint pools (`RotateProxy`).
 
-| P8 | Experimental non-Chromium backend (`vakbrowse-dom`, feature-gated
-  |     `dom-backend` on `vakbrowse-server`): QuickJS (`quick-js 0.4`) embedded
-  |     on a dedicated OS thread behind an `mpsc` bridge (`Context: !Send` vs
-  |     `PageOps: Send`). Ship `eval_text` (JS-REPL stringification),
-  |     `wait_for_truthy`, inline `<script>` execution on `load`, reactive
-  |     `location` (read + redirect-on-assignment, depth-bounded), live
-  |     `document.getElementById` (read/write `textContent`/`value` over the
-  |     shared `Arc<RwLock<Node>>`), `addEventListener`+`Event`+`requestSubmit`
-  |     form-submit dispatch (JS-only loop), `javascript:` hrefs. Opt-in via
-  |     `SessionOptions.backend="dom"` (`vak open --backend dom`,
-  |     `browser_open {backend:"dom"}`, REST JSON); server-wide default via
-  |     `VAKBROWSE_BACKEND=cdp|dom` (honored when the client omits
-  |     `backend`). Routes through `SessionManager::launcher_for` under the
-  |     engine seam; `Backend::Dom` without the feature fails loud (no silent
-  |     Chrome fallback). Honest limits: no layout, no network. `Action::Click`
-  |     returns `ActionResult::Clicked { navigated, url }` (anchor-aware URL-
-  |     change ground truth) with a bot-wall recovery ladder (trusted mouse →
-  |     DOM `.click()` → `location.href =`) before reporting `navigated:false`,
-  |     proven over CDP + the REST/WS wire. | **done** |
-| P9 | Servo/Lightpanda backend behind the engine trait (post-experimental) | pending |
+| P8 | Servo/Lightpanda backend behind the engine trait (post-experimental) | pending |
+| P9 | WebDriver BiDi backend behind the engine trait (post-experimental) | pending |
 
 ## Conventions
 

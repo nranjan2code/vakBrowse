@@ -88,7 +88,7 @@ export type SessionOptions = {
   proxy?: string;
   proxies?: string[];
   human_timing?: boolean;
-  backend?: 'cdp' | 'dom';
+  backend?: 'cdp';
   headed?: boolean;
 };
 

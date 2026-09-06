@@ -58,7 +58,7 @@ export function SnapshotView({
             ◎
           </div>
           <div className="font-mono text-xs font-bold text-bone uppercase">
-            AWAITING BROWSER ENGINE STREAM
+            AWAITING BROWSER RUNTIME STREAM
           </div>
           <p className="text-xs text-text-dim font-sans leading-relaxed">
             Select a verified preset scenario above or click "+ NEW BROWSER NODE" to stream live visual renders and perception nodes.

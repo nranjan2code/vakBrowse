@@ -4,12 +4,13 @@ import type { Cookie } from '../lib/types';
 interface Props {
   onGetCookies: () => Promise<any>;
   onSetCookie: (cookie: Cookie) => Promise<any>;
+  onClearCookies?: () => Promise<any>;
   loading: boolean;
   disabled: boolean;
   currentUrl?: string;
 }
 
-export function CookieManager({ onGetCookies, onSetCookie, loading, disabled, currentUrl }: Props) {
+export function CookieManager({ onGetCookies, onSetCookie, onClearCookies, loading, disabled, currentUrl }: Props) {
   const [cookies, setCookies] = useState<Cookie[]>([]);
   const [fetching, setFetching] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -44,6 +45,22 @@ export function CookieManager({ onGetCookies, onSetCookie, loading, disabled, cu
       setStatusMsg(`Loaded ${list.length} active cookies`);
     } catch (err: any) {
       setStatusMsg(`Failed to load cookies: ${err.message}`);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const handleClearCookies = async () => {
+    if (disabled || !onClearCookies) return;
+    if (!window.confirm('Clear all cookies stored in this browser session?')) return;
+    setFetching(true);
+    setStatusMsg(null);
+    try {
+      await onClearCookies();
+      setCookies([]);
+      setStatusMsg('All cookies cleared from browser context');
+    } catch (err: any) {
+      setStatusMsg(`Failed to clear cookies: ${err.message}`);
     } finally {
       setFetching(false);
     }
@@ -91,6 +108,16 @@ export function CookieManager({ onGetCookies, onSetCookie, loading, disabled, cu
           <span className="badge-dim">{cookies.length} COOKIES</span>
         </div>
         <div className="flex items-center gap-1.5">
+          {cookies.length > 0 && onClearCookies && (
+            <button
+              onClick={handleClearCookies}
+              disabled={disabled || loading || fetching}
+              className="px-2 py-0.5 bg-surface hover:bg-danger/20 border border-border hover:border-danger text-text-muted hover:text-danger rounded-xs text-[10px] transition-colors"
+              title="Clear all cookies in this session"
+            >
+              ✕ CLEAR ALL
+            </button>
+          )}
           <button
             onClick={() => setShowAddForm(!showAddForm)}
             disabled={disabled || loading || fetching}

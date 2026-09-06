@@ -32,7 +32,7 @@ export function PlaygroundWorkspace() {
   const [showNewModal, setShowNewModal] = useState(false);
   const [newUrl, setNewUrl] = useState('https://en.wikipedia.org/wiki/Artificial_intelligence');
   const [newStealth, setNewStealth] = useState(true);
-  const [newBackend, setNewBackend] = useState<'cdp' | 'dom'>('cdp');
+
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
@@ -134,7 +134,6 @@ export function PlaygroundWorkspace() {
       const res = await open({
         url: newUrl,
         stealth: newStealth,
-        backend: newBackend,
       });
       if (res && typeof res === 'object' && 'id' in res) {
         setActiveSession((res as any).id);
@@ -621,8 +620,8 @@ export function PlaygroundWorkspace() {
               }`}>
                 <div className="px-3 py-1 bg-surface/80 border-b border-border/80 flex items-center justify-between text-[10px] text-text-muted shrink-0">
                   <span className="text-bone font-bold uppercase">LIVE SCREEN CANVAS</span>
-                  <span className={session.liveScreenshot ? 'text-emerald-400 font-bold' : session.liveHtml ? 'text-accent font-bold' : 'text-text-muted'}>
-                    {session.liveScreenshot ? 'REAL-TIME CHROMIUM RENDER' : session.liveHtml ? 'PURE-RUST DOM LIVE PREVIEW' : 'AWAITING RENDER'}
+                  <span className={session.liveScreenshot ? 'text-emerald-400 font-bold' : 'text-text-muted'}>
+                    {session.liveScreenshot ? 'REAL-TIME CHROMIUM RENDER' : 'AWAITING RENDER'}
                   </span>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 flex items-start justify-center bg-[radial-gradient(#1f1f26_1px,transparent_1px)] bg-[size:16px_16px]">
@@ -634,31 +633,15 @@ export function PlaygroundWorkspace() {
                         className="max-w-full h-auto object-contain block"
                       />
                     </div>
-                  ) : session.liveHtml ? (
-                    <div className="w-full h-full border border-border-strong rounded-xs shadow-2xl overflow-hidden flex flex-col bg-white min-h-[420px]">
-                      <div className="px-3 py-1 bg-[#1a1a20] border-b border-border text-[10px] text-bone font-mono flex items-center justify-between shrink-0">
-                        <span className="flex items-center gap-1.5 truncate">
-                          <span className="w-2 h-2 rounded-full bg-accent" />
-                          DOM PREVIEW: {session.snapshot?.url || activeSession}
-                        </span>
-                        <span className="text-accent text-[9px] uppercase font-bold">REAL HTML RENDER</span>
-                      </div>
-                      <iframe
-                        srcDoc={session.liveHtml}
-                        title="DOM Render View"
-                        sandbox="allow-same-origin allow-scripts"
-                        className="w-full flex-1 border-0 bg-white"
-                      />
-                    </div>
                   ) : activeSession && session.snapshot ? (
                     <div className="p-6 text-center text-text-dim my-auto space-y-3 max-w-md">
                       <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-accent/15 border border-accent/40 rounded-xs text-bone text-[11px] font-bold uppercase tracking-wider font-mono">
                         <span className="w-2 h-2 rounded-xs bg-accent animate-pulse" />
-                        PURE-RUST HEADLESS DOM ACTIVE
+                        CHROMIUM ENGINE ACTIVE
                       </div>
-                      <div className="text-xs font-bold text-bone">NO GRAPHICAL RASTERIZER VIEWPORT</div>
+                      <div className="text-xs font-bold text-bone">SCREENSHOT LOADING</div>
                       <p className="text-[11px] font-sans text-text-dim leading-relaxed">
-                        Pure-Rust DOM backend runs in-memory with embedded QuickJS and zero Chromium process overhead. Interactive @eN nodes, DOM actions, and live JS REPL evaluation are fully operational.
+                        The browser runtime is running and the perception tree is available. The live screenshot will appear shortly.
                       </p>
                       <div className="text-[10px] text-accent font-mono border border-accent/20 bg-accent/5 p-2 rounded-xs truncate">
                         ACTIVE: {session.snapshot.url || activeSession} ({session.snapshot.elements.length} nodes)
@@ -1006,49 +989,15 @@ export function PlaygroundWorkspace() {
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] text-text-dim uppercase tracking-wider block">ENGINE BACKEND:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewBackend('cdp')}
-                    className={`py-1.5 px-2 rounded-xs border transition-all ${
-                      newBackend === 'cdp'
-                        ? 'bg-accent/15 border-accent text-bone font-bold'
-                        : 'bg-surface border-border text-text-dim hover:text-text'
-                    }`}
-                  >
-                    CDP (CHROMIUM)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewBackend('dom')}
-                    className={`py-1.5 px-2 rounded-xs border transition-all ${
-                      newBackend === 'dom'
-                        ? 'bg-accent/15 border-accent text-bone font-bold'
-                        : 'bg-surface border-border text-text-dim hover:text-text'
-                    }`}
-                  >
-                    DOM (QUICKJS)
-                  </button>
+              <div className="p-2.5 bg-surface border border-border rounded-xs text-[11px] text-text-dim">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <span className="text-bone font-bold uppercase tracking-wider">ENGINE: CDP (CHROMIUM)</span>
                 </div>
+                <p className="text-[10px] leading-relaxed">
+                  Full Chromium browser via Chrome DevTools Protocol. Real rendering, screenshots, trusted mouse events, and JavaScript evaluation.
+                </p>
               </div>
-
-              {/* DOM BACKEND NOTICE */}
-              {newBackend === 'dom' && (
-                <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-xs space-y-1.5 text-[11px]">
-                  <div className="text-accent font-bold uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                    PURE-RUST DOM + QUICKJS (REAL HEADLESS ENGINE)
-                  </div>
-                  <p className="text-text-dim leading-relaxed text-[10px]">
-                    Performs <b>real HTTP/HTTPS network fetches</b>, in-memory HTML tree parsing, QuickJS script execution, and accessibility perception with zero Chromium memory footprint.
-                  </p>
-                  <div className="text-text-muted text-[10px] flex items-center gap-1">
-                    <span className="text-emerald-400">✓</span> Works on any live website (<code className="text-bone">https://</code>), local file (<code className="text-bone">file://</code>), or <code className="text-bone">about:blank</code>.
-                  </div>
-                </div>
-              )}
 
               <label className="flex items-center gap-2 cursor-pointer text-text-dim hover:text-text pt-1">
                 <input

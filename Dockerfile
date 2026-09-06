@@ -14,10 +14,8 @@ WORKDIR /src
 COPY --from=frontend /static /src/playground/static
 COPY . .
 RUN cargo build --release -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse-mcp -p vakbrowse-ffi \
-      --features vakbrowse-server/dom-backend,vakbrowse-api/playground \
+      --features vakbrowse-api/playground \
  && ./target/release/vakd doctor --no-probe   # bakes the pinned chrome-headless-shell into the image cache
-# Operators can flip the server-wide default backend offline (chrome-free):
-#   docker run -e VAKBROWSE_BACKEND=dom -p 7788:7788 vakbrowse
 
 # ---- runtime ----
 FROM debian:bookworm-slim

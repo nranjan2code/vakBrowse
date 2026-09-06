@@ -145,31 +145,25 @@ vak rotate-proxy s1`,
     {
       id: 'testing',
       code: 'UC-05',
-      badge: 'SYNTHETIC QA',
-      title: 'Zero-Chromium CI Testing Engine',
-      subtitle: 'Pure-Rust DOM backend with embedded QuickJS for millisecond hermetic verification.',
-      problem: 'Running Chromium in Docker CI pipelines requires bloated 1.5GB images, privileged sandbox configurations (`--no-sandbox` security risks), and slow 5-second cold starts that make test suites crawl.',
-      solution: 'The experimental `vakbrowse-dom` backend implements `EngineLauncher` and `PageOps` using an in-process pure-Rust HTML tokenizer and QuickJS runtime on a dedicated OS thread. It runs real JS, evaluates selectors, and validates workflows with ZERO browser processes.',
+      badge: 'HEADLESS CI',
+      title: 'Headless Browser CI Testing',
+      subtitle: 'Automated Chromium-headless-shell with sandbox fallback for Docker and CI environments.',
+      problem: 'Running full Chrome in Docker CI pipelines requires large images, privileged sandbox configurations, and careful handling of root vs non-root users. Flaky browser launches derail CI pipelines.',
+      solution: 'vakBrowse auto-downloads chrome-headless-shell via Chrome-for-Testing (CFT), detects UID 0 and hardened runners, and retries with --no-sandbox on launch failure. The sandbox stays ON when possible. All wrapped behind the same SessionManager::with_policy(policy) call.',
       metrics: [
-        { label: 'IMAGE OVERHEAD', value: '0MB (NO CHROMIUM)' },
-        { label: 'COLD START TIME', value: '<3ms' },
-        { label: 'SECURITY RISKS', value: 'NO CHROMIUM PRIVILEGES' },
+        { label: 'AUTO SANDBOX', value: 'FALLBACK ON FAILURE' },
+        { label: 'ENGINE BINARY', value: 'CHROME-HEADLESS-SHELL' },
+        { label: 'PLATFORMS', value: 'LINUX AMD64 + MACOS' },
       ],
       codeExample: {
-        lang: 'Rust Hermetic Test',
-        snippet: `use vakbrowse_server::{SessionManager, Policy, Request, SessionOptions};
-use vakbrowse_dom::DomLauncher;
-use std::sync::Arc;
+        lang: 'Docker CI',
+        snippet: `# Dockerfile — vakBrowse bakes the engine at build time
+FROM rust:1-bookworm
+RUN cargo build --release -p vakd
+RUN target/release/vakd doctor --no-probe  # downloads chrome-headless-shell
 
-// Spin up a browser session without launching any external process
-let manager = SessionManager::new(Policy::default(), Arc::new(DomLauncher));
-let res = manager.handle(Request::Open {
-    options: SessionOptions {
-        url: "file:///tests/fixtures/app.html".into(),
-        backend: "dom".into(),
-        ..Default::default()
-    }
-}).await;`,
+# CI test: runs as root, sandbox auto-disabled with warning
+RUN cargo test --workspace`,
       },
     },
   ];

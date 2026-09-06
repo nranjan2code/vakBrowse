@@ -263,7 +263,7 @@ curl -X POST http://localhost:7788/playground/rpc \\
                   Rust Native Crates
                 </h3>
                 <p className="text-xs text-text-dim font-sans mt-0.5">
-                  Direct integration via `vakbrowse-engine`, `vakbrowse-server`, or the pure-Rust `vakbrowse-dom` backend.
+                  Direct integration via `vakbrowse-engine` and `vakbrowse-server` crates for custom Rust applications.
                 </p>
               </div>
               <span className="badge-orange">CARGO.TOML</span>

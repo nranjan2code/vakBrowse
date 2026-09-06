@@ -24,7 +24,7 @@ export function Footer({ onSelectTab }: FooterProps) {
             The high-precision, token-frugal browser runtime engineered specifically for AI agents, LLM tool loops, and autonomous workflows.
           </p>
           <div className="text-[10px] text-text-muted space-y-0.5">
-            <div>ARCHITECTURE: RUST SEAM (CDP + DOM-QUICKJS)</div>
+            <div>ARCHITECTURE: RUST CORE (CDP ENGINE)</div>
             <div>LICENSE: APACHE-2.0 / MIT</div>
             <div>PLATFORMS: LINUX AMD64, MACOS ARM/X86, DOCKER</div>
           </div>
@@ -48,7 +48,7 @@ export function Footer({ onSelectTab }: FooterProps) {
             </li>
             <li>
               <button onClick={() => onSelectTab('architecture')} className="hover:text-accent transition-colors">
-                [03] Dual-Engine Architecture
+                [03] CDP Engine Architecture
               </button>
             </li>
             <li>
@@ -129,7 +129,7 @@ export function Footer({ onSelectTab }: FooterProps) {
 
       <div className="border-t border-border px-6 py-4 flex flex-col md:flex-row items-center justify-between text-[11px] text-text-muted gap-2">
         <div>
-          © 2026 vakBrowse Project. High-performance browser engine for machine intelligence.
+          © 2026 vakBrowse Project. High-performance browser runtime for machine intelligence.
         </div>
         <div className="flex items-center gap-4">
           <span>PORT: 7788</span>

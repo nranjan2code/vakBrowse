@@ -67,9 +67,8 @@ pub trait PageOps: Send {
     /// snapshots until the next navigation.
     async fn snapshot(&mut self) -> Result<Snapshot>;
     /// CSS selector → stable `@eN` refs (clickable immediately). Backends that
-    /// cannot resolve selectors return `Unsupported`. The DOM backend walks
-    /// interactive elements; CDP will route through `querySelectorAll` + the
-    /// snapshot's ref numbering.
+    /// cannot resolve selectors return `Unsupported`. CDP routes through
+    /// `querySelectorAll` + the snapshot's ref numbering.
     async fn find_by_css(&mut self, selector: &str) -> Result<Vec<ElementRef>> {
         let _ = selector;
         Err(VakError::Unsupported(

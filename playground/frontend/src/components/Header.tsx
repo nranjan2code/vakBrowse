@@ -33,11 +33,11 @@ export function Header({ currentTab, onSelectTab, activeSessionCount }: HeaderPr
           </span>
           <span className="hidden lg:inline text-text-muted">|</span>
           <span className="hidden lg:inline">
-            LATENCY: <span className="text-text font-semibold">42ms MEDIAN</span>
+            SNAPSHOT: <span className="text-text font-semibold">~42ms MEDIAN</span>
           </span>
           <span className="hidden xl:inline text-text-muted">|</span>
           <span className="hidden xl:inline">
-            BACKENDS: <span className="text-bone">CDP + DOM-QUICKJS</span>
+            ENGINE: <span className="text-bone">CDP (CHROMIUM)</span>
           </span>
         </div>
         

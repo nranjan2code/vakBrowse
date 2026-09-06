@@ -75,15 +75,6 @@ export const TOUR_STEPS: TourStep[] = [
     ],
     target: '.session-manager',
   },
-  {
-    id: 'dom-backend',
-    title: 'Zero-Chromium DOM Backend (QuickJS)',
-    description: [
-      'Select "DOM" backend to run tests with zero Chromium processes.',
-      'In-process HTML tokenization and embedded QuickJS for instant hermetic CI testing.',
-    ],
-    target: '.session-manager',
-  },
 ];
 
 interface Props {

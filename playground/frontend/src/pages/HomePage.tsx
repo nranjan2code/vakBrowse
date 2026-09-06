@@ -2,7 +2,7 @@ import React from 'react';
 import { TokenCalculator } from '../components/TokenCalculator';
 import type { PageTab } from '../components/Header';
 import terminalImg from '../assets/terminal.jpg';
-import schematicImg from '../assets/schematic.jpg';
+import schematicImg from '../assets/schematic.svg';
 
 interface HomePageProps {
   onNavigate: (tab: PageTab) => void;
@@ -26,15 +26,15 @@ export function HomePage({ onNavigate }: HomePageProps) {
               </div>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-bone font-sans leading-[1.08]">
-                THE AGENT-NATIVE BROWSER.
+                THE AGENT-NATIVE BROWSER RUNTIME.
                 <span className="block text-accent font-mono text-3xl sm:text-4xl lg:text-5xl mt-1">
-                  REAL BROWSER. ZERO BLOAT.
+                  REAL BROWSER POWER. ZERO AGENT BLOAT.
                 </span>
               </h1>
 
               <p className="text-base sm:text-lg text-text-dim leading-relaxed font-sans max-w-2xl">
-                Standard browsers waste 50,000 tokens of HTML bloat on every page turn.
-                <span className="text-bone font-medium"> vakBrowse</span> is a high-speed Rust browser engine that compresses the live accessibility tree into <span className="text-yellow font-mono font-semibold">&lt;500 tokens</span> of actionable references (<code className="text-accent bg-card px-1 py-0.5 rounded-xs">@e42</code>) with trusted hardware mouse events and native WebMCP support.
+                Standard browsers and test drivers waste 50,000 tokens of HTML noise on every page turn.
+                Powered by a headless Chromium core, <span className="text-bone font-medium">vakBrowse</span> is a high-speed Rust runtime that compresses the live accessibility tree into <span className="text-yellow font-mono font-semibold">&lt;500 tokens</span> of actionable references (<code className="text-accent bg-card px-1 py-0.5 rounded-xs">@e42</code>) with trusted hardware mouse events and 34 native MCP tools.
               </p>
 
               {/* Action buttons */}
@@ -64,8 +64,8 @@ export function HomePage({ onNavigate }: HomePageProps) {
                   <div className="text-bone font-bold text-sm sm:text-base text-yellow">&lt;500 TOKENS</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-text-muted">ENGINE SEAM</div>
-                  <div className="text-bone font-bold text-sm sm:text-base">CDP + DOM/JS</div>
+                  <div className="text-[10px] text-text-muted">ENGINE</div>
+                  <div className="text-bone font-bold text-sm sm:text-base">CDP (CHROMIUM)</div>
                 </div>
                 <div>
                   <div className="text-[10px] text-text-muted">NATIVE PROTOCOL</div>
@@ -203,7 +203,7 @@ URL:  https://en.wikipedia.org/wiki/Artificial_intelligence
                 The Sacred Engine Seam
               </h3>
               <p className="text-xs text-text-dim font-sans mt-0.5">
-                Backend-agnostic design: swap between Chromium-for-Testing (CDP) and zero-chrome DOM+QuickJS without altering agent code.
+                Powered by Chromium via Chrome DevTools Protocol (CDP). One engine, one command model for every surface.
               </p>
             </div>
             <button
@@ -217,7 +217,7 @@ URL:  https://en.wikipedia.org/wiki/Artificial_intelligence
           <div className="relative aspect-[16/9] bg-surface rounded-xs overflow-hidden border border-border">
             <img
               src={schematicImg}
-              alt="vakBrowse Software Browser Engine Schematic"
+              alt="vakBrowse Browser Runtime Architecture Schematic"
               className="w-full h-full object-contain p-2"
             />
           </div>

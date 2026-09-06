@@ -9,12 +9,19 @@ interface Props {
 
 interface BatchStep {
   id: string;
-  type: 'navigate' | 'click' | 'fill' | 'press_key' | 'extract' | 'eval_text';
+  type: 'navigate' | 'click' | 'fill' | 'press_key' | 'extract' | 'eval_text' | 'scroll' | 'wait_for_url' | 'find_by_css' | 'click_at';
   url?: string;
   ref?: string;
   text?: string;
   key?: string;
   expression?: string;
+  pattern?: string;
+  selector?: string;
+  dx?: number;
+  dy?: number;
+  x?: number;
+  y?: number;
+  timeoutMs?: number;
 }
 
 const PRESET_BATCHES: { name: string; description: string; steps: BatchStep[] }[] = [
@@ -42,6 +49,14 @@ const PRESET_BATCHES: { name: string; description: string; steps: BatchStep[] }[
       { id: '2', type: 'extract' },
     ],
   },
+  {
+    name: 'Scroll & Extract',
+    description: 'Scroll down 500px on long article, then extract readable content.',
+    steps: [
+      { id: '1', type: 'scroll', dy: 500 },
+      { id: '2', type: 'extract' },
+    ],
+  },
 ];
 
 export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props) {
@@ -62,6 +77,11 @@ export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props)
       text: type === 'fill' ? 'sample input' : undefined,
       key: type === 'press_key' ? 'Enter' : undefined,
       expression: type === 'eval_text' ? 'document.title' : undefined,
+      pattern: type === 'wait_for_url' ? 'wikipedia' : undefined,
+      selector: type === 'find_by_css' ? 'a' : undefined,
+      dy: type === 'scroll' ? 400 : undefined,
+      x: type === 'click_at' ? 200 : undefined,
+      y: type === 'click_at' ? 200 : undefined,
     };
     setSteps([...steps, newStep]);
   };
@@ -88,6 +108,10 @@ export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props)
       if (s.type === 'press_key') return { type: 'press_key', key: s.key || 'Enter' };
       if (s.type === 'extract') return { type: 'extract' };
       if (s.type === 'eval_text') return { type: 'eval_text', expression: s.expression };
+      if (s.type === 'scroll') return { type: 'scroll', dx: s.dx || 0, dy: s.dy || 400 };
+      if (s.type === 'wait_for_url') return { type: 'wait_for_url', pattern: s.pattern || '', timeout_ms: s.timeoutMs || 5000 };
+      if (s.type === 'find_by_css') return { type: 'find_by_css', selector: s.selector || 'a' };
+      if (s.type === 'click_at') return { type: 'click_at', x: s.x || 100, y: s.y || 100 };
       return { type: s.type };
     });
 
@@ -224,6 +248,7 @@ export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props)
                 <option value="Tab">Tab</option>
                 <option value="Escape">Escape</option>
                 <option value="ArrowDown">ArrowDown</option>
+                <option value="ArrowUp">ArrowUp</option>
               </select>
             )}
 
@@ -236,6 +261,57 @@ export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props)
                 className="input-sm w-full text-[11px]"
               />
             )}
+
+            {step.type === 'scroll' && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-text-muted">DY (PIXELS):</span>
+                <input
+                  type="number"
+                  value={step.dy || 400}
+                  onChange={(e) => updateStep(step.id, { dy: parseInt(e.target.value) || 0 })}
+                  className="input-sm w-24 text-[11px]"
+                />
+              </div>
+            )}
+
+            {step.type === 'wait_for_url' && (
+              <input
+                type="text"
+                value={step.pattern || ''}
+                onChange={(e) => updateStep(step.id, { pattern: e.target.value })}
+                placeholder="Substring pattern to wait for..."
+                className="input-sm w-full text-[11px]"
+              />
+            )}
+
+            {step.type === 'find_by_css' && (
+              <input
+                type="text"
+                value={step.selector || ''}
+                onChange={(e) => updateStep(step.id, { selector: e.target.value })}
+                placeholder="CSS selector, e.g. a[href*='wiki']"
+                className="input-sm w-full text-[11px]"
+              />
+            )}
+
+            {step.type === 'click_at' && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-text-muted">X:</span>
+                <input
+                  type="number"
+                  value={step.x || 100}
+                  onChange={(e) => updateStep(step.id, { x: parseInt(e.target.value) || 0 })}
+                  className="input-sm w-16 text-[11px]"
+                />
+                <span className="text-[10px] text-text-muted">Y:</span>
+                <input
+                  type="number"
+                  value={step.y || 100}
+                  onChange={(e) => updateStep(step.id, { y: parseInt(e.target.value) || 0 })}
+                  className="input-sm w-16 text-[11px]"
+                />
+              </div>
+            )}
           </div>
         )))}
 
@@ -246,8 +322,12 @@ export function BatchStudio({ onRunBatch, loading, disabled, activeRef }: Props)
           <button onClick={() => addStep('click')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ CLICK</button>
           <button onClick={() => addStep('fill')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ FILL</button>
           <button onClick={() => addStep('press_key')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ KEY</button>
+          <button onClick={() => addStep('scroll')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ SCROLL</button>
           <button onClick={() => addStep('extract')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ EXTRACT</button>
           <button onClick={() => addStep('eval_text')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ EVAL</button>
+          <button onClick={() => addStep('wait_for_url')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ WAIT URL</button>
+          <button onClick={() => addStep('find_by_css')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ FIND CSS</button>
+          <button onClick={() => addStep('click_at')} className="btn-ghost py-0.5 px-1.5 text-[10px]">+ CLICK AT</button>
         </div>
       </div>
 

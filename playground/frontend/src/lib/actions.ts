@@ -124,10 +124,75 @@ export async function setCookie(sid: string, cookie: any): Promise<ActionResult>
   return resp.Ok.Result;
 }
 
+export async function clearCookies(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'clear_cookies' } });
+  return resp.Ok.Result;
+}
+
+export async function scroll(sid: string, dx: number, dy: number): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'scroll', dx, dy } });
+  return resp.Ok.Result;
+}
+
+export async function clickAt(sid: string, x: number, y: number): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'click_at', x, y } });
+  return resp.Ok.Result;
+}
+
+export async function rotateProxy(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'rotate_proxy' } });
+  return resp.Ok.Result;
+}
+
+export async function waitForTruthy(sid: string, expression: string, timeoutMs = 5000): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'wait_for_truthy', expression, timeout_ms: timeoutMs } });
+  return resp.Ok.Result;
+}
+
+export async function webmcpTools(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'web_mcp_tools' } });
+  return resp.Ok.Result;
+}
+
+export async function webmcpInvoke(sid: string, name: string, argumentsJson: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'web_mcp_invoke', name, arguments_json: argumentsJson } });
+  return resp.Ok.Result;
+}
+
+export async function setDownloadDir(sid: string, dir: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'set_download_dir', dir } });
+  return resp.Ok.Result;
+}
+
+export async function listTabs(sid: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'tabs' } });
+  return resp.Ok.Result;
+}
+
+export async function newTab(sid: string, url?: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'new_tab', url } });
+  return resp.Ok.Result;
+}
+
+export async function switchTab(sid: string, tab: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'switch_tab', tab } });
+  return resp.Ok.Result;
+}
+
+export async function closeTab(sid: string, tab: string): Promise<ActionResult> {
+  const resp = await rpc({ type: 'act', session: sid, action: { type: 'close_tab', tab } });
+  return resp.Ok.Result;
+}
+
 export async function getDownloads(sid: string): Promise<any[]> {
   const resp = await rpc({ type: 'act', session: sid, action: { type: 'downloads' } });
-  const text = resp.Ok.Result.text;
-  return JSON.parse(text);
+  const text = resp?.Ok?.Result?.text;
+  if (!text) return [];
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return [];
+  }
 }
 
 export async function batch(sid: string, actions: any[]): Promise<any[]> {

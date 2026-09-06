@@ -23,20 +23,7 @@ use vakbrowse_core::{
     Cookie, CookieInput, ElementRef, Extracted, ProfileId, Result, SessionId, Snapshot, TabId,
     TabInfo, VakError, WebMcpTool,
 };
-#[cfg(feature = "dom-backend")]
-use vakbrowse_dom::DomLauncher;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
-
-/// Which engine backend opens a session. Default = CDP (Chrome); `dom` selects
-/// the experimental pure-Rust QuickJS DOM backend (no Chrome process —
-/// `backend = "dom"` requires the `dom-backend` feature to be compiled in).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    #[default]
-    Cdp,
-    Dom,
-}
 
 /// Options for opening a new session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,12 +36,6 @@ pub struct SessionOptions {
     pub headless: bool,
     #[serde(default)]
     pub url: Option<String>,
-    /// Engine backend: `"cdp"` (Chrome) or `"dom"` (experimental pure-Rust
-    /// QuickJS DOM backend, no Chrome). Requires the `dom-backend` feature on
-    /// the server crate. `None` => use the server's default (`VAKBROWSE_BACKEND`,
-    /// CDP unless overridden) so operators can run a chrome-free server.
-    #[serde(default)]
-    pub backend: Option<Backend>,
     /// When set, launch with a deterministic stealth fingerprint derived
     /// from this seed (defeats navigator.webdriver exposure, missing
     /// language/plugin data, robotic pointer teleports).
@@ -85,7 +66,6 @@ impl Default for SessionOptions {
             profile: None,
             headless: true,
             url: None,
-            backend: None,
             stealth_seed: None,
             proxy: None,
             proxies: Vec::new(),
@@ -417,17 +397,10 @@ impl Default for PoolConfig {
 /// Owns all live sessions; drives engine launches and action dispatch.
 pub struct SessionManager {
     sessions: Mutex<HashMap<SessionId, ManagedSession>>,
-    /// Trait object so the engine backend is a plug-in: a non-CDP backend
-    /// injects itself via `SessionManager::new(policy, launcher)`. The CDP
-    /// shell remains the zero-argument convenience default.
-    launcher: Arc<dyn EngineLauncher>,
-    /// Experimental DOM backend (QuickJS, no Chrome). `Some` only when the
-    /// `dom-backend` feature is compiled in; otherwise `Backend::Dom` opens
-    /// raise an explicit error so agents don't silently fall back to Chrome.
-    dom_launcher: Option<Arc<dyn EngineLauncher>>,
-    /// Server-wide default backend when a session's `options.backend` is `None`
-    /// (client omitted it). Operators set this via `VAKBROWSE_BACKEND`.
-    default_backend: Backend,
+    /// The CDP engine (chrome-headless-shell). CDP is the only backend; the
+    /// `EngineLauncher`/`PageOps` trait seam remains for unit-testability but
+    /// is not exposed as a runtime swappable backend.
+    launcher: CdpLauncher,
     policy: Policy,
     pool: PoolConfig,
     profiles_root: Option<PathBuf>,
@@ -436,50 +409,18 @@ pub struct SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new(Policy::default(), default_launcher())
-    }
-}
-
-/// The out-of-the-box engine: a managed chrome-headless-shell via CDP.
-fn default_launcher() -> Arc<dyn EngineLauncher> {
-    Arc::new(CdpLauncher::default())
-}
-
-/// Select the launcher per-open request based on `SessionOptions.backend`.
-/// `Backend::Dom` needs the `dom-backend` feature; otherwise it fails loud (no
-/// silent Chrome fallback) so an agent knows its chrome-free session didn't
-/// get what it asked for.
-impl SessionManager {
-    fn launcher_for(&self, backend: &Backend) -> Result<&Arc<dyn EngineLauncher>> {
-        Ok(match backend {
-            Backend::Cdp => &self.launcher,
-            Backend::Dom => self.dom_launcher.as_ref().ok_or_else(|| {
-                VakError::Engine(
-                    "dom backend not compiled in; rebuild with --features \
-                     vakbrowse-server/dom-backend"
-                        .into(),
-                )
-            })?,
-        })
+        Self::new(Policy::default())
     }
 }
 
 impl SessionManager {
-    /// Construct with an explicit engine launcher (swap-in point for other
-    /// backends). Use `SessionManager::default()` / `SessionManager::new(policy)`
-    /// for the default CDP backend.
-    pub fn new(policy: Policy, launcher: Arc<dyn EngineLauncher>) -> Self {
+    /// Construct with a CDP launcher (chrome-headless-shell). Use
+    /// `SessionManager::default()` or `SessionManager::with_policy(policy)`
+    /// for the zero-argument convenience constructors.
+    pub fn new(policy: Policy) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            launcher,
-            dom_launcher: {
-                #[cfg(feature = "dom-backend")]
-                let d: Option<Arc<dyn EngineLauncher>> = Some(Arc::new(DomLauncher));
-                #[cfg(not(feature = "dom-backend"))]
-                let d: Option<Arc<dyn EngineLauncher>> = None;
-                d
-            },
-            default_backend: Backend::Cdp,
+            launcher: CdpLauncher::default(),
             policy,
             pool: PoolConfig::default(),
             profiles_root: default_profiles_root(),
@@ -487,18 +428,9 @@ impl SessionManager {
         }
     }
 
-    /// Convenience: `new` wired to the default CDP launcher.
+    /// Convenience: `new` wired to a CDP launcher with a custom policy.
     pub fn with_policy(policy: Policy) -> Self {
-        Self::new(policy, default_launcher())
-    }
-
-    /// Convenience: `new` wired to the default CDP launcher AND a server-wide
-    /// default backend (used when a session omits `options.backend`). This is
-    /// the entry point for `vakd`/`vakd-rest` to honor `VAKBROWSE_BACKEND`.
-    pub fn with_policy_and_backend(policy: Policy, default_backend: Backend) -> Self {
-        let mut s = Self::new(policy, default_launcher());
-        s.default_backend = default_backend;
-        s
+        Self::new(policy)
     }
 
     pub fn with_pool(mut self, pool: PoolConfig) -> Self {
@@ -601,11 +533,10 @@ impl SessionManager {
             }
         }
 
-        // Client may override per-session; otherwise fall back to the server's
-        // configured default (VAKBROWSE_BACKEND). `Backend::Dom` without the
-        // `dom-backend` feature fails loud in `launcher_for`.
-        let backend = options.backend.unwrap_or(self.default_backend);
-        let page: Box<dyn PageOps> = self.launcher_for(&backend)?.launch(&launch).await?;
+        // CDP is the only engine backend. The launcher is fixed at
+        // `SessionManager::new` time, so `SessionOptions` no longer carries a
+        // `backend` field.
+        let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
         let id = self.next_session_id().await;
         let init_proxy_idx = if options.proxies.is_empty() {
             0

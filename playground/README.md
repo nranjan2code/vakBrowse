@@ -36,9 +36,9 @@ playground/
    - `GET /playground[/index.html]` — serves the React SPA
    - `GET /playground/{*path}` — serves JS/CSS assets with SPA fallback
 
-3. **Engine** — `vakd-rest` launches Chrome via the CDP backend (default) or
-   the DOM backend (`VAKBROWSE_BACKEND=dom`). The playground's Open Session
-   dialog lets you toggle stealth, proxy, backend, and headed mode.
+3. **Engine** — `vakd-rest` launches Chrome via the CDP backend.
+   The playground's Open Session dialog lets you toggle stealth, proxy, and
+   headed mode.
 
 ### Components
 
@@ -85,7 +85,7 @@ docker run -p 7788:7788 vakbrowse-playground
 
 ## What You Can Do
 
-- **Open a session** — navigate to any URL, with optional stealth mode, proxy, or DOM backend
+- **Open a session** — navigate to any URL, with optional stealth mode and proxy
 - **Snapshot** — see all interactive elements as `@eN` refs, click any to select
 - **Click & fill** — interact with elements by ref (CSS-selector-resolved refs work too)
 - **Extract** — get readability-style main-content text

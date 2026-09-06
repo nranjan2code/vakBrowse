@@ -21,7 +21,6 @@ export function SessionManager({
   const [showModal, setShowModal] = useState(false);
   const [url, setUrl] = useState('https://example.com');
   const [stealth, setStealth] = useState(true);
-  const [backend, setBackend] = useState<'cdp' | 'dom'>('cdp');
   const [proxy, setProxy] = useState('');
   const [headed, setHeaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -33,7 +32,6 @@ export function SessionManager({
       const opts: Record<string, unknown> = {
         url,
         stealth,
-        backend,
         headed,
       };
       if (proxy.trim()) {
@@ -161,36 +159,6 @@ export function SessionManager({
                 />
               </div>
 
-              {/* Engine Backend Selection */}
-              <div className="space-y-1">
-                <label className="text-[11px] text-text-dim uppercase tracking-wider block">
-                  ENGINE BACKEND:
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBackend('cdp')}
-                    className={`py-1.5 px-2 text-xs font-mono rounded-xs border transition-all ${
-                      backend === 'cdp'
-                        ? 'bg-accent/15 border-accent text-bone font-bold'
-                        : 'bg-surface border-border text-text-dim hover:text-text'
-                    }`}
-                  >
-                    CDP (CHROMIUM)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBackend('dom')}
-                    className={`py-1.5 px-2 text-xs font-mono rounded-xs border transition-all ${
-                      backend === 'dom'
-                        ? 'bg-accent/15 border-accent text-bone font-bold'
-                        : 'bg-surface border-border text-text-dim hover:text-text'
-                    }`}
-                  >
-                    DOM (QUICKJS / ZERO CHROME)
-                  </button>
-                </div>
-              </div>
 
               {/* Toggles */}
               <div className="grid grid-cols-2 gap-3 pt-1 font-mono text-xs">

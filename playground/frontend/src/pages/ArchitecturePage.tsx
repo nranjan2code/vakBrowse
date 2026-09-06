@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PageTab } from '../components/Header';
-import schematicImg from '../assets/schematic.jpg';
+import schematicImg from '../assets/schematic.svg';
 
 interface ArchitecturePageProps {
   onNavigate: (tab: PageTab) => void;
@@ -17,7 +17,7 @@ export function ArchitecturePage({ onNavigate }: ArchitecturePageProps) {
         </h1>
         <p className="text-sm sm:text-base text-text-dim font-sans max-w-3xl">
           vakBrowse is engineered from the ground up in Rust around strict trait boundaries.
-          All surface APIs (Daemon, CLI, REST, WebSocket, MCP, and C FFI) communicate through an identical command model, decoupled from underlying browser engines.
+          All surface APIs (Daemon, CLI, REST, WebSocket, MCP, and C FFI) communicate through an identical command model, driving headless Chromium via object-safe Rust traits.
         </p>
       </div>
 
@@ -25,7 +25,7 @@ export function ArchitecturePage({ onNavigate }: ArchitecturePageProps) {
       <div className="te-panel rounded-xs border-border p-6 space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-border">
           <span className="font-mono text-xs text-bone font-bold uppercase tracking-wider">
-            SCHEMATIC FIG 1.0 // DUAL-ENGINE TOPOLOGY
+            SCHEMATIC FIG 1.0 // CDP CHROMIUM TOPOLOGY
           </span>
           <span className="badge-orange">RUST CORE // TRAIT-BOUND</span>
         </div>
@@ -33,7 +33,7 @@ export function ArchitecturePage({ onNavigate }: ArchitecturePageProps) {
         <div className="relative aspect-[16/9] bg-surface rounded-xs overflow-hidden border border-border">
           <img
             src={schematicImg}
-            alt="vakBrowse Software Browser Engine Schematic"
+            alt="vakBrowse Browser Runtime Architecture Schematic"
             className="w-full h-full object-contain p-4"
           />
         </div>
@@ -55,14 +55,14 @@ export function ArchitecturePage({ onNavigate }: ArchitecturePageProps) {
             <span className="badge-dim">crates/vakbrowse-engine</span>
           </div>
           <h3 className="text-lg font-bold font-sans text-bone">
-            Trait-Driven Backend Agnosticism
+            Trait-Driven Engine Architecture
           </h3>
           <p className="text-xs sm:text-sm text-text-dim leading-relaxed">
             All capabilities pass through the <code className="text-accent bg-bg px-1 rounded-xs">EngineLauncher</code> and <code className="text-accent bg-bg px-1 rounded-xs">PageOps</code> traits in <code className="text-text">vakbrowse-engine</code>.
             <code className="text-bone">SessionManager</code> holds an <code className="text-text">Arc&lt;dyn EngineLauncher&gt;</code>. Neither the CLI, the REST server, the Python FFI, nor the MCP server ever touch or leak CDP or chromiumoxide types.
           </p>
           <div className="p-3 bg-bg border border-border rounded-xs text-[11px] font-mono text-emerald-400">
-            SessionManager::new(policy, Arc::new(DomLauncher)) // Chrome-free test!
+            SessionManager::with_policy(policy) // CDP backend via chromiumoxide
           </div>
         </div>
 
@@ -121,28 +121,6 @@ export function ArchitecturePage({ onNavigate }: ArchitecturePageProps) {
           <div className="p-3 bg-bg border border-border rounded-xs text-[11px] font-mono text-text-dim">
             Site isolation left intact; no broken cross-frame security
           </div>
-        </div>
-      </div>
-
-      {/* Experimental DOM Backend Highlight */}
-      <div className="te-panel rounded-xs border-accent/60 p-6 space-y-4 bg-surface/30">
-        <div className="flex items-center gap-2">
-          <span className="badge-yellow">EXPERIMENTAL PROOF OF SEAM</span>
-          <span className="font-mono font-bold text-sm text-bone">
-            vakbrowse-dom // PURE RUST DOM + QUICKJS
-          </span>
-        </div>
-
-        <p className="text-xs sm:text-sm text-text-dim leading-relaxed">
-          Proving that our engine seam is truly swappable: <code className="text-accent">vakbrowse-dom</code> is an in-process, single-doc DOM tree with an embedded QuickJS engine running on a dedicated OS thread behind an MPSC bridge. It executes inline <code className="text-text">&lt;script&gt;</code> tags, resolves <code className="text-text">document.querySelector</code> via a dependency-free matcher, and evaluates JS expressions with ZERO browser processes.
-        </p>
-
-        <div className="flex items-center gap-4 text-xs font-mono text-text-muted">
-          <span>RUNS REAL JS</span>
-          <span>•</span>
-          <span>NO CHROMIUM REQUIRED</span>
-          <span>•</span>
-          <span>SUB-MILLISECOND EXECUTION</span>
         </div>
       </div>
     </div>

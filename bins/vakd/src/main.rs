@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use vakbrowse_engine::cft;
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
-use vakbrowse_server::{Backend, Policy, Request, SessionManager};
+use vakbrowse_server::{Policy, Request, SessionManager};
 
 #[derive(Parser)]
 #[command(name = "vakd", version, about = "vakBrowse daemon")]
@@ -80,15 +80,8 @@ async fn serve(
     policy: Policy,
     pool: vakbrowse_server::PoolConfig,
 ) -> vakbrowse_core::Result<()> {
-    let default_backend = std::env::var("VAKBROWSE_BACKEND")
-        .ok()
-        .map(|s| match s.to_ascii_lowercase().as_str() {
-            "dom" => Backend::Dom,
-            _ => Backend::Cdp,
-        })
-        .unwrap_or(Backend::Cdp);
     let manager =
-        Arc::new(SessionManager::with_policy_and_backend(policy, default_backend).with_pool(pool));
+        Arc::new(SessionManager::with_policy(policy).with_pool(pool));
     manager.spawn_reaper();
     let path = std::path::PathBuf::from(socket);
 

@@ -1,7 +1,7 @@
 # vakBrowse
 
-An agent-native browser: a Rust core that gives AI agents a real, scriptable
-web browser. Humans are optional.
+An agent-native browser runtime: a high-speed Rust core that gives AI agents
+a real, scriptable web browser powered by headless Chromium under the hood. Humans are optional.
 
 ## Architecture
 
@@ -10,19 +10,15 @@ vakBrowse/
 ├── crates/
 │   ├── vakbrowse-core        # domain types, errors, wire shapes
 │   ├── vakbrowse-perception  # a11y tree -> compact snapshots with stable @eN refs
-│   ├── vakbrowse-engine      # EngineLauncher/PageOps traits (object-safe,
-│   │                         #   swap backend via Arc<dyn EngineLauncher>) +
-│   │                         #   CDP backend (chrome-headless-shell), stealth,
-│   │                         #   proxy, history, extract, WebMCP
+│   ├── vakbrowse-engine      # EngineLauncher/PageOps traits + CDP backend:
+│   │                         #   chrome-headless-shell, stealth, proxy, history,
+│   │                         #   extract, WebMCP
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
 │   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 34 browser_*
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
 │   ├── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
-│   └── vakbrowse-dom         # Pure-Rust engine backend (no Chromium process,
-│                             #   real HTTP/HTTPS via ureq + rustls, embedded QuickJS).
-│                             #   Swaps into SessionManager via DomLauncher
 ├── bins/vakd                 # daemon (session pool, profiles, policy)
 └── tests/fixtures            # offline fixture pages
 ```
@@ -32,7 +28,7 @@ capability once, all five surfaces get it.
 
 ## Status
 
-**Roadmap P0–P7 complete; P8 (experimental DOM backend) done.**
+**Roadmap P0–P7 complete.**
 
 - **Core (P0–P1)** — chrome-headless-shell download/pin/cache; a11y snapshots
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
@@ -63,23 +59,10 @@ capability once, all five surfaces get it.
   sub-150ms randomized input delays (cadence tell, no TLS spoofing);
   `scripts/release.sh` bakes the pinned engine + gates mac/linux-root/
   linux-uid1000 green.
-- **Pure-Rust engine backend (P8)** — `vakbrowse-dom`
-  (`DomLauncher`): a chrome-free backend (`cargo build
-  --features vakbrowse-server/dom-backend`) that implements the full
-  `EngineLauncher`/`PageOps` seam and swaps into `SessionManager` with zero
-  chrome. Performs real HTTP/HTTPS network fetches over rustls, embedded
-  QuickJS (`quick-js`) running on a dedicated thread behind an `mpsc`
-  bridge, standard WHATWG URL resolution, intact authentic source delivery,
-  fragment navigations, and event dispatch. It drives the **same**
-  `Request::Batch` / `RotateProxy` / fill→snapshot model as CDP. Opt-in per session
-  (`vak open --backend dom`, `browser_open {backend:"dom"}`, REST
-  `{"options":{"backend":"dom"}}`).
 - **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
-  dual-backend support (CDP screenshots and pure-Rust DOM live rendering with
-  `<base href>` resolution), batch studio, console REPL, cookie manager, and
-  tour guide.
+  CDP screenshots, batch studio, console REPL, cookie manager, and tour guide.
 
-115 tests, clippy clean. Hardened against real environments: launch args verified
+73 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):
@@ -96,7 +79,9 @@ not webdriver-level), and DuckDuckGo CAPTCHAs / serves an empty shell
 regardless of fingerprint. Search+click-through recipes use Wikipedia and
 example.com. Architectural notes: app errors now flow as a
 structured `ServiceError` over the wire (never raw strings), the engine
-seam is `Arc<dyn EngineLauncher>` so the session manager is backend-agnostic,
+seam is `CdpLauncher` held by `SessionManager` (CDP is the sole backend — the
+`EngineLauncher`/`PageOps` trait seam remains for future backends but is not
+exposed as a runtime-swappable backend),
 MCP `browser_screenshot` returns real PNG pixels (not a placeholder), and the
 FFI embeds a long-lived runtime with a nested-context guard so it works from
 inside a caller tokio loop. The stdio transport is spec-robust: `vak-mcp`
@@ -148,7 +133,7 @@ The playground speaks the unified `Request` model via `POST /playground/rpc`,
 the same JSON protocol the daemon, CLI, MCP, and FFI use. A guided tour
 built into the UI walks through sessions, snapshots, clicks, fills, CSS
 find, extract, source, screenshots, JavaScript eval, file upload, cookies,
-downloads, batching, stealth, proxy rotation, and the DOM backend.
+downloads, batching, stealth, and proxy rotation.
 
 See [`playground/README.md`](playground/README.md) for component architecture.
 

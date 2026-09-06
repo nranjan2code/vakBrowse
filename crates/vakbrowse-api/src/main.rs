@@ -1,18 +1,7 @@
 use std::net::SocketAddr;
 
 use vakbrowse_api::serve;
-use vakbrowse_server::{Backend, Policy};
-
-fn parse_backend(s: &str) -> Backend {
-    match s.to_ascii_lowercase().as_str() {
-        "cdp" => Backend::Cdp,
-        "dom" => Backend::Dom,
-        other => {
-            eprintln!("error: VAKBROWSE_BACKEND must be `cdp` or `dom`, got `{other}`");
-            std::process::exit(2);
-        }
-    }
-}
+use vakbrowse_server::Policy;
 
 #[tokio::main]
 async fn main() -> vakbrowse_core::Result<()> {
@@ -38,14 +27,6 @@ async fn main() -> vakbrowse_core::Result<()> {
             .map(str::to_string)
             .collect(),
     };
-    let default_backend = std::env::var("VAKBROWSE_BACKEND")
-        .map(|s| parse_backend(&s))
-        .unwrap_or(Backend::Cdp);
 
-    serve(
-        addr,
-        policy,
-        default_backend,
-    )
-    .await
+    serve(addr, policy).await
 }

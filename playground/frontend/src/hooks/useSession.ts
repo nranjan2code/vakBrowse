@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import { snapshot, click, fill, selectOption, pressKey, extract, source, screenshot,
-  evalText, findByCss, navigate, waitForUrl, getCookies, setCookie, getDownloads, batch,
-  setFileChooser } from '../lib/actions';
+import {
+  snapshot, click, fill, selectOption, pressKey, extract, source, screenshot,
+  evalText, findByCss, navigate, back, forward, reload, waitForUrl, waitForTruthy,
+  getCookies, setCookie, clearCookies, getDownloads, setDownloadDir, batch,
+  setFileChooser, scroll, clickAt, rotateProxy, webmcpTools, webmcpInvoke,
+  listTabs, newTab, switchTab, closeTab,
+} from '../lib/actions';
 import type { SessionId, Snapshot, ElementRef, ActionResult, Cookie, SnapshotNode } from '../lib/types';
 
 export interface ActivityLogItem {
   id: string;
   time: string;
-  type: 'OPEN' | 'NAVIGATE' | 'CLICK' | 'FILL' | 'EXTRACT' | 'SNAPSHOT' | 'EVAL' | 'BATCH' | 'ERROR';
+  type: 'OPEN' | 'NAVIGATE' | 'CLICK' | 'FILL' | 'EXTRACT' | 'SNAPSHOT' | 'EVAL' | 'BATCH' | 'SCROLL' | 'CLICK_AT' | 'PROXY' | 'WEBMCP' | 'TABS' | 'ERROR';
   summary: string;
   details?: string;
 }
@@ -22,7 +26,6 @@ export interface BreadcrumbItem {
 export function useSession(sid: SessionId | null) {
   const [snapshotData, setSnapshotData] = useState<Snapshot | null>(null);
   const [liveScreenshot, setLiveScreenshot] = useState<string | null>(null);
-  const [liveHtml, setLiveHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ActionResult | null>(null);
@@ -67,40 +70,16 @@ export function useSession(sid: SessionId | null) {
         });
       }
       
-      // Auto-fetch visual representation:
-      // In CDP: chromium provides real live PNG screenshot
-      // In DOM: pure-Rust headless engine provides real live HTML source
+      // Auto-fetch live screenshot from Chromium CDP backend
       try {
         const img = await screenshot(sid);
         if (img && (img as any).png_base64) {
           setLiveScreenshot((img as any).png_base64);
-          setLiveHtml(null);
         } else if (typeof img === 'string') {
           setLiveScreenshot(img);
-          setLiveHtml(null);
         }
       } catch (_) {
-        try {
-          const src = await source(sid);
-          let rawHtml = (src as any)?.text || (src as any)?.html;
-          if (rawHtml && typeof rawHtml === 'string') {
-            const pageUrl = result.snapshot.url;
-            const baseTag = pageUrl && (pageUrl.startsWith('http://') || pageUrl.startsWith('https://'))
-              ? `<base href="${pageUrl}">`
-              : '';
-            if (baseTag) {
-              if (rawHtml.includes('<head>')) {
-                rawHtml = rawHtml.replace('<head>', `<head>${baseTag}`);
-              } else if (rawHtml.includes('<head ')) {
-                rawHtml = rawHtml.replace(/<head\b[^>]*>/, `$&${baseTag}`);
-              } else {
-                rawHtml = baseTag + rawHtml;
-              }
-            }
-            setLiveHtml(rawHtml);
-            setLiveScreenshot(null);
-          }
-        } catch (_) {}
+        // Screenshot may fail on some pages; perception tree remains available
       }
     } catch (e: any) {
       setError(e.message);
@@ -134,16 +113,23 @@ export function useSession(sid: SessionId | null) {
       } else if (result?.type === 'image') {
         setLiveScreenshot(result.png_base64);
         addLog('SNAPSHOT', `Screenshot captured (${elapsed}ms)`);
+      } else if (actionName === 'scroll') {
+        addLog('SCROLL', `Scrolled viewport (${elapsed}ms)`);
+      } else if (actionName === 'click_at') {
+        addLog('CLICK_AT', `Vision click dispatched at coords (${elapsed}ms)`);
+      } else if (actionName === 'rotate_proxy') {
+        addLog('PROXY', `Rotated proxy endpoint (${elapsed}ms)`);
       } else {
         addLog('NAVIGATE', `${actionName.toUpperCase()} completed in ${elapsed}ms`);
       }
 
-      // Auto-refresh snapshot and live screenshot on navigation-causing actions
+      // Auto-refresh snapshot and live screenshot on navigation/mutation-causing actions
       if (
         actionName === 'navigate' ||
         actionName === 'back' ||
         actionName === 'forward' ||
         actionName === 'reload' ||
+        actionName === 'rotate_proxy' ||
         result?.type === 'navigated' ||
         (result?.type === 'clicked' && result?.navigated)
       ) {
@@ -151,6 +137,14 @@ export function useSession(sid: SessionId | null) {
         setSelectedRef(null);
         setSelectedNode(null);
         await refresh();
+      } else if (actionName === 'scroll' || actionName === 'click_at') {
+        // Re-capture screenshot after scroll or coordinate click
+        try {
+          const img = await screenshot(sid);
+          if (img && (img as any).png_base64) {
+            setLiveScreenshot((img as any).png_base64);
+          }
+        } catch (_) {}
       } else if (result?.type === 'snapshot') {
         setSnapshotData(result.snapshot);
       }
@@ -197,11 +191,23 @@ export function useSession(sid: SessionId | null) {
     source: () => runAction('source', () => source(sid!)),
     screenshot: () => runAction('screenshot', () => screenshot(sid!)),
     navigate: (url: string) => runAction('navigate', () => navigate(sid!, url)),
-    waitForUrl: (pattern: string) => runAction('wait_for_url', () => waitForUrl(sid!, pattern)),
+    waitForUrl: (pattern: string, timeoutMs?: number) => runAction('wait_for_url', () => waitForUrl(sid!, pattern, timeoutMs)),
+    waitForTruthy: (expr: string, timeoutMs?: number) => runAction('wait_for_truthy', () => waitForTruthy(sid!, expr, timeoutMs)),
     setFileChooser: (ref: ElementRef, paths: string[]) => runAction('set_file_chooser', () => setFileChooser(sid!, ref, paths)),
     getCookies: () => runAction('cookies', () => getCookies(sid!) as any),
     setCookie: (cookie: Cookie) => runAction('set_cookie', () => setCookie(sid!, cookie)),
+    clearCookies: () => runAction('clear_cookies', () => clearCookies(sid!)),
     getDownloads: () => runAction('downloads', () => getDownloads(sid!)),
+    setDownloadDir: (dir: string) => runAction('set_download_dir', () => setDownloadDir(sid!, dir)),
+    scroll: (dx: number, dy: number) => runAction('scroll', () => scroll(sid!, dx, dy)),
+    clickAt: (x: number, y: number) => runAction('click_at', () => clickAt(sid!, x, y)),
+    rotateProxy: () => runAction('rotate_proxy', () => rotateProxy(sid!)),
+    webmcpTools: () => runAction('web_mcp_tools', () => webmcpTools(sid!)),
+    webmcpInvoke: (name: string, argsJson: string) => runAction('web_mcp_invoke', () => webmcpInvoke(sid!, name, argsJson)),
+    listTabs: () => runAction('tabs', () => listTabs(sid!)),
+    newTab: (url?: string) => runAction('new_tab', () => newTab(sid!, url)),
+    switchTab: (tab: string) => runAction('switch_tab', () => switchTab(sid!, tab)),
+    closeTab: (tab: string) => runAction('close_tab', () => closeTab(sid!, tab)),
     batch: (actionsList: unknown[]) => runAction('batch', () => batch(sid!, actionsList)),
   };
 
@@ -209,7 +215,6 @@ export function useSession(sid: SessionId | null) {
     sid,
     snapshot: snapshotData,
     liveScreenshot,
-    liveHtml,
     loading,
     error,
     lastResult,

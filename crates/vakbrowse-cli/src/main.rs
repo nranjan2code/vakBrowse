@@ -43,11 +43,6 @@ enum Command {
         /// timing isn't robotic (cadence-based behavioral tell).
         #[arg(long)]
         human_timing: bool,
-        /// Engine backend: `cdp` (Chrome) or `dom` (experimental pure-Rust
-        /// QuickJS backend, no Chrome process). Omit to use the daemon's default
-        /// (`VAKBROWSE_BACKEND`, CDP unless overridden).
-        #[arg(long)]
-        backend: Option<String>,
     },
     /// Close a session.
     Close { session: String },
@@ -191,20 +186,11 @@ fn to_request(cmd: Command) -> Result<Request, String> {
             proxy,
             proxies,
             human_timing,
-            backend,
         } => Request::Open {
             options: SessionOptions {
-                profile: profile.clone().map(vakbrowse_core::ProfileId::new),
+                profile: profile.as_ref().map(vakbrowse_core::ProfileId::new),
                 headless: !headed,
                 url,
-                backend: match backend.as_deref() {
-                    None => None,
-                    Some("cdp") => Some(vakbrowse_server::Backend::Cdp),
-                    Some("dom") => Some(vakbrowse_server::Backend::Dom),
-                    Some(other) => {
-                        return Err(format!("unrecognized backend `{other}` (use cdp|dom)"));
-                    }
-                },
                 stealth_seed: stealth.then(|| profile.unwrap_or_else(|| "default".to_string())),
                 proxy,
                 proxies,

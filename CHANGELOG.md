@@ -6,6 +6,16 @@ runs the mac/linux-root/linux-uid1000 gates, tags, and appends an entry.
 
 ## Unreleased
 
+- **Dropped the experimental DOM backend** (`vakbrowse-dom` crate, `DomLauncher`,
+  `dom-backend` feature, `--backend dom` CLI/MCP/REST option, `VAKBROWSE_BACKEND`
+  env var). CDP (chrome-headless-shell) is the sole engine backend. The
+  `EngineLauncher`/`PageOps` trait seam remains in `vakbrowse-engine` for
+  future backends, but `SessionManager` now holds a `CdpLauncher` directly
+  (no `Arc<dyn EngineLauncher>` indirection). Removed the `Backend` enum,
+  `SessionOptions.backend`, `SessionManager::with_policy_and_backend`, and the
+  `backend` parameter from the Python SDK's `Session.open()`. This removes 35
+  chrome-free tests and ~2,500 lines of non-production code. Test count:
+  115 → 73 passed.
 - **Version alignment**: workspace version bumped from `0.1.0` → `0.4.0` to
   match the Python SDK (`vakbrowse` PyPI) and git tags. Previously `cargo
   run -p vakd -- --version` reported `0.1.0` while `pip show vakbrowse`

@@ -104,7 +104,6 @@ class Session:
         human_timing: bool = False,
         profile: str | None = None,
         headed: bool = False,
-        backend: str | None = None,
     ) -> tuple[str, str]:
         """Open a session. Returns (session_id, initial_url)."""
         opts: dict = {"headless": not headed}
@@ -120,8 +119,6 @@ class Session:
             opts["proxies"] = list(proxies)
         if human_timing:
             opts["human_timing"] = True
-        if backend:
-            opts["backend"] = backend
         info = self._payload({"type": "open", "options": opts})["Opened"]
         return info["id"], info["url"]
 

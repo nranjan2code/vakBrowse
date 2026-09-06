@@ -22,8 +22,8 @@ echo "=== Building Playground frontend ==="
 npm --prefix playground/frontend install
 NODE_ENV=production npm --prefix playground/frontend run build
 
-echo "=== Building vakd-rest with playground + dom-backend features ==="
-cargo build -p vakbrowse-api --bin vakd-rest --features playground,dom-backend
+echo "=== Building vakd-rest with playground feature ==="
+cargo build -p vakbrowse-api --bin vakd-rest --features playground
 
 echo ""
 echo "Playground ready."
