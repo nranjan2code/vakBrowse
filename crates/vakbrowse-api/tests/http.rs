@@ -440,6 +440,72 @@ async fn click_no_navigation_over_ws() {
     .await;
     let _ = recv_ws_text(&mut ws).await;
 }
+/// The unified `/playground/rpc` endpoint mirrors the daemon's UDS protocol:
+/// same `Request` JSON in, same `Response` JSON out. This test verifies the
+/// open → snapshot → close round-trip goes through the single RPC endpoint.
+#[tokio::test]
+async fn playground_rpc_roundtrips_request_model() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let (addr, _dir) = spawn_server().await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Open via the unified Request model.
+    let resp = client
+        .post(format!("{base}/playground/rpc"))
+        .json(&json!({ "type": "open", "options": { "url": fixture_url("hello.html") } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let session = resp.json::<Value>().await.unwrap()["Ok"]["Opened"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Snapshot via the unified Request model.
+    let resp = client
+        .post(format!("{base}/playground/rpc"))
+        .json(&json!({ "type": "act", "session": session, "action": { "type": "snapshot" } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.json::<Value>().await.unwrap();
+    let elements = body["Ok"]["Result"]["snapshot"]["elements"]
+        .as_array()
+        .expect("elements array");
+    assert!(elements.iter().any(|e| e["role"] == "link"), "should find a link: {body}");
+
+    // Close via the unified Request model.
+    let resp = client
+        .post(format!("{base}/playground/rpc"))
+        .json(&json!({ "type": "close", "session": session }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["Ok"]["Closed"],
+        true,
+    );
+
+    // ListSessions via the unified Request model.
+    let resp = client
+        .post(format!("{base}/playground/rpc"))
+        .json(&json!({ "type": "list_sessions" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.json::<Value>().await.unwrap();
+    assert_eq!(
+        body["Ok"]["Sessions"].as_array().unwrap().len(),
+        0,
+        "all sessions closed: {body}"
+    );
+}
+
 mod ws_util {
     use super::*;
 

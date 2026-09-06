@@ -1,13 +1,22 @@
 //! REST + WebSocket surface. Thin translation layer: every endpoint maps to
 //! the same `Request` model the daemon and MCP server use.
+//!
+//! Optionally serves the React playground UI (behind the `playground` feature)
+//! at `/playground` so `vakd-rest` is a single binary for both API and UI.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::State;
+#[cfg(feature = "playground")]
+use axum::extract::Path;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::StatusCode;
+#[cfg(feature = "playground")]
+use axum::http::header;
 use axum::response::IntoResponse;
+#[cfg(feature = "playground")]
+use axum::response::Response as AxResponse;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use vakbrowse_core::SessionId;
@@ -22,17 +31,39 @@ struct ApiState {
 
 pub fn build_router(manager: Arc<SessionManager>) -> Router {
     let state = ApiState { manager };
-    Router::new()
+
+    let app = Router::new()
         .route("/health", get(health))
         .route("/sessions", post(open_session).get(list_sessions))
         .route("/sessions/{session}", axum::routing::delete(close_session))
         .route("/sessions/{session}/actions", post(dispatch_action))
         .route("/sessions/{session}/batch", post(dispatch_batch))
         .route("/ws", any(ws_bridge))
-        // Request body size is bounded by MAX_BATCH_SIZE in the
-        // SessionManager (checked before any action processing, covering all
-        // surfaces). See AGENTS.md for the full defense-in-depth rationale.
-        .with_state(state)
+        // Unified playground RPC — same `Request` model the daemon/CLI/MCP use.
+        .route("/playground/rpc", post(playground_rpc));
+
+    #[cfg(feature = "playground")]
+    {
+        let app = app
+            .route("/playground", get(playground_root))
+            .route("/playground/", get(playground_root))
+            .route("/playground/{*path}", get(playground_static));
+        app.with_state(state)
+    }
+    #[cfg(not(feature = "playground"))]
+    {
+        app.with_state(state)
+    }
+}
+
+/// Directory where the prebuilt frontend lives. Override with
+/// `VAKBROWSE_PLAYGROUND_DIR`; defaults to `../../playground/static` relative
+/// to the manifest dir. Only called when the `playground` feature is active.
+#[cfg(feature = "playground")]
+fn playground_dir() -> std::path::PathBuf {
+    std::env::var("VAKBROWSE_PLAYGROUND_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../playground/static"))
 }
 
 /// Serve forever on `addr`. `default_backend` is the server-wide engine chosen
@@ -186,6 +217,80 @@ async fn handle_ws(mut socket: WebSocket, state: ApiState) {
             .unwrap_or_else(|e| format!("{{\"Err\":\"encode failure: {e}\"}}"));
         if socket.send(Message::Text(out.into())).await.is_err() {
             break;
+        }
+    }
+}
+
+/// Unified playground RPC endpoint. Accepts the same `Request` model as the
+/// daemon's UDS wire protocol — `{"type":"open","options":{...}}`,
+/// `{"type":"act","session":"s1","action":{...}}`, etc. — and returns the
+/// `Response` JSON. This lets the playground UI talk to one endpoint instead
+/// of mapping each route individually.
+async fn playground_rpc(
+    State(state): State<ApiState>,
+    Json(request): Json<Request>,
+) -> impl IntoResponse {
+    let status = if matches!(request, Request::Open { .. }) {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    let response = state.manager.handle(request).await;
+    let status = match &response {
+        Ok(ResponsePayload::Error(_)) => status_for(&response),
+        _ => status,
+    };
+    (status, Json(response))
+}
+
+/// Serve `index.html` for the `/playground` and `/playground/` routes.
+#[cfg(feature = "playground")]
+async fn playground_root(_state: State<ApiState>) -> AxResponse {
+    serve_static_file("index.html")
+}
+
+/// Serve a file from the playground build output directory on disk.
+/// Falls back to `index.html` for SPA routing if the file is not found.
+#[cfg(feature = "playground")]
+async fn playground_static(
+    _state: State<ApiState>,
+    Path(relative): Path<String>,
+) -> AxResponse {
+    let clean = relative.trim_start_matches("playground/");
+    serve_static_file(clean)
+}
+
+#[cfg(feature = "playground")]
+fn serve_static_file(relative: &str) -> AxResponse {
+    let base = playground_dir();
+    let target = base.join(relative);
+
+    match std::fs::read(&target) {
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&target).first_or_octet_stream();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.to_string())],
+                axum::body::Body::from(bytes),
+            )
+                .into_response()
+        }
+        // SPA fallback — serve index.html so client-side routing works
+        Err(_) => {
+            let index_path = base.join("index.html");
+            match std::fs::read(&index_path) {
+                Ok(bytes) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    axum::body::Body::from(bytes),
+                )
+                    .into_response(),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Playground UI not built. Build it with:\n  cd playground/frontend && npm install && npm run build",
+                )
+                    .into_response(),
+            }
         }
     }
 }

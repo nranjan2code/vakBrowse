@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .btn-primary {
+    @apply px-3 py-1 rounded text-sm font-medium bg-accent hover:bg-accent-hover text-white transition-colors disabled:opacity-50;
+  }
+  .btn-success {
+    @apply px-3 py-1 rounded text-sm font-medium bg-success/20 hover:bg-success/30 text-success transition-colors disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply px-3 py-1 rounded text-sm font-medium bg-card hover:bg-accent/20 text-text transition-colors disabled:opacity-50;
+  }
+  .input-sm {
+    @apply px-2 py-1 bg-bg border border-border rounded text-sm text-text disabled:opacity-50;
+  }
+  .session-manager {
+    /* target for tour highlight */
+  }
+  .snapshot-view {
+    /* target for tour highlight */
+  }
+  .action-toolbar {
+    /* target for tour highlight */
+  }
+  .result-pane {
+    /* target for tour highlight */
+  }
+}

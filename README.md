@@ -17,7 +17,7 @@ vakBrowse/
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
-│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 28 browser_*
+│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 34 browser_*
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
 │   ├── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
 │   └── vakbrowse-dom         # Experimental pure-Rust backend (no browser
@@ -38,7 +38,7 @@ capability once, all five surfaces get it.
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
   scroll/wait; cookies + persistent profiles.
 - **Surfaces (P2–P3)** — `vakd` daemon over UDS; `vak` CLI; `vak-mcp`
-  (**28 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
+  (**34 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
   `libvakbrowse_ffi` cdylib (Python ctypes drives full flows in-process);
   Docker image with the pinned engine baked in.
 - **Agent-grade capabilities (P4)** — stealth fingerprints + humanized
@@ -132,6 +132,28 @@ into the wheel, so end users don't). Or go bare-ctypes against a cargo build:
 `cargo build -p vakbrowse-ffi --release --config profile.release.strip=false`
 (the workspace `strip=true` corrupts a cdylib's `__LINKEDIT` alignment on
 macOS and dyld rejects it; the wheel disables stripping for the FFI lib only).
+
+## Playground
+
+A React + TypeScript showcase app that exercises every vakBrowse capability
+through the `vakd-rest` HTTP API.
+
+```bash
+# Build frontend + backend in one go
+./scripts/build-playground.sh
+
+# Serve both API and UI from the same binary
+target/debug/vakd-rest
+# Open http://localhost:7788/playground/
+```
+
+The playground speaks the unified `Request` model via `POST /playground/rpc`,
+the same JSON protocol the daemon, CLI, MCP, and FFI use. A guided tour
+built into the UI walks through sessions, snapshots, clicks, fills, CSS
+find, extract, source, screenshots, JavaScript eval, file upload, cookies,
+downloads, batching, stealth, proxy rotation, and the DOM backend.
+
+See [`playground/README.md`](playground/README.md) for component architecture.
 
 
 ## Install (from a release tag)

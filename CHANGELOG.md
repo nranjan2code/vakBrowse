@@ -28,6 +28,18 @@ runs the mac/linux-root/linux-uid1000 gates, tags, and appends an entry.
   `None` (via `checked_sub`) instead of silently resolving to the first
   interactive element. Refs are 1-based; `@e0` is not valid and must not
   alias `@e1`.
+- **Playground showcase app** (`playground/`): a React + TypeScript + Vite +
+  Tailwind UI that exercises every vakBrowse capability through `vakd-rest`'s
+  `POST /playground/rpc` endpoint (same unified `Request` model as the daemon,
+  CLI, MCP, and FFI). Features: interactive a11y snapshot with clickable `@eN`
+  refs, action toolbar (click, fill, select, key, find, eval, extract, source,
+  screenshot, file upload, cookies, downloads, batch), result pane, and a
+  built-in guided tour. Feature-gated behind `vakbrowse-api/playground` (adds
+  `mime_guess` dep; serves files from disk via `VAKBROWSE_PLAYGROUND_DIR` or
+  `playground/static/`). Docker image includes a `playground` build target.
+  Build via `./scripts/build-playground.sh`. Verified end-to-end against
+  `https://example.com`, `iana.org`, and `en.wikipedia.org` (search → click
+  → extract flow).
 - **Cookie round-trip test**: added a hermetic DOM-backend integration test
   (`dom_backend_cookie_set_get_roundtrip`) verifying `SetCookie` → `Cookies`
   → `ClearCookies` through `SessionManager`. Replaces the CDP smoke test

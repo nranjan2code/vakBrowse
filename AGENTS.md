@@ -119,6 +119,29 @@ s.close(sid)
 Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
 (engine binary is baked in at build time via `vakd doctor --no-probe`).
 
+### Playground
+
+The `playground/` directory contains a React + TypeScript showcase app that
+exercises every vakBrowse capability through the `vakd-rest` HTTP API.
+
+- `playground/frontend/` — Vite + React + Tailwind UI (SessionManager, snapshot
+  view with clickable `@eN` refs, ActionToolbar, ResultPane, TourGuide)
+- `playground/static/` — built frontend output (served by `vakd-rest` with the
+  `playground` cargo feature)
+- `POST /playground/rpc` — single JSON endpoint speaking the unified `Request`
+  model (same as the daemon's UDS protocol)
+- `GET /playground` — serves the React SPA with SPA-fallback routing
+- `VAKBROWSE_PLAYGROUND_DIR` env var overrides the static files directory
+
+Build + serve: `./scripts/build-playground.sh` then `target/debug/vakd-rest`.
+Open `http://localhost:7788/playground/`. A guided tour is built into the UI
+(`? Tour` button).
+
+The playground is feature-gated behind `vakbrowse-api/playground` (adds the
+`mime_guess` dep for content-type sniffing; serves files from disk at
+`VAKBROWSE_PLAYGROUND_DIR` or `playground/static/` relative to the manifest).
+Default `cargo build` / `cargo test` do not require it.
+
 - Tests must pass and clippy must be clean before declaring work done.
 - Network-dependent tests are marked `#[ignore]`; the offline suite must stay
   hermetic (fixtures under `tests/fixtures/`).
@@ -204,15 +227,21 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   31 browser_* (tabs, history, screenshot/click-at,
+                        #   34 browser_* (tabs, history, screenshot/click-at,
                         #   extract, webmcp, wait_url, stealth/proxy on open,
                         #   set_file_chooser, source, downloads);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
-                        #   endpoints map 1:1 onto Request model
+                        #   endpoints map 1:1 onto Request model. `--features
+                        #   vakbrowse-api/playground` adds `/playground/rpc`
+                        #   (unified Request JSON endpoint) + static file serving
+                        #   for the React playground UI.
   vakbrowse-ffi         # cdylib C ABI (`vak_request(json) -> json`) w/ embedded
                         #   tokio runtime; consumed via ctypes/koffi/etc.
 bins/
   vakd                  # daemon (`serve`, `status`, `doctor`): owns sessions over UDS
+playground/
+  frontend/             # React + TS + Vite + Tailwind showcase UI
+  static/               # built frontend (served by vakd-rest w/ `playground` feature)
 ```
 
 ## Key facts
