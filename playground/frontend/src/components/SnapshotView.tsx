@@ -5,6 +5,7 @@ import type { ActivityLogItem } from '../hooks/useSession';
 interface Props {
   snapshot: Snapshot | null;
   liveScreenshot: string | null;
+  rawSourceBytes: number;
   activityLogs: ActivityLogItem[];
   onElementClick: (node: SnapshotNode) => void;
   selectedRef: string | null;
@@ -17,6 +18,7 @@ type RoleFilter = 'ALL' | 'LINKS' | 'INPUTS' | 'BUTTONS' | 'OTHER';
 export function SnapshotView({
   snapshot,
   liveScreenshot,
+  rawSourceBytes,
   activityLogs,
   onElementClick,
   selectedRef,
@@ -127,7 +129,9 @@ export function SnapshotView({
             ~{estimatedTokens} TOKENS
           </div>
           <div className="badge-dim">
-            -98.8% VS DOM
+            {rawSourceBytes > 0 && estimatedTokens > 0
+              ? `-${((1 - estimatedTokens / Math.round(rawSourceBytes / 4)) * 100).toFixed(1)}% VS DOM`
+              : estimatedTokens > 0 ? 'MEASURING...' : 'IDLE'}
           </div>
         </div>
       </div>

@@ -43,7 +43,7 @@ export function TokenCalculator() {
           </span>
         </div>
         <div className="badge-orange">
-          SAVINGS EFFICIENCY: 99.1%
+          SAVINGS EFFICIENCY: {percentageSavings}%
         </div>
       </div>
 

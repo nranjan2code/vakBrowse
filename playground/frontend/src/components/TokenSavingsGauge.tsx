@@ -7,17 +7,18 @@ interface Props {
 
 export function TokenSavingsGauge({ elementsCount, rawSourceBytes }: Props) {
   const isLive = elementsCount > 0;
+  const hasRawData = isLive && rawSourceBytes != null && rawSourceBytes > 0;
 
-  // Estimated raw tokens (industry standard ~4 chars per token)
-  const rawBytes = isLive ? (rawSourceBytes || 380000) : 0;
-  const rawTokens = isLive ? Math.round(rawBytes / 4) : 0;
+  // Actual raw bytes from the page's document.documentElement.outerHTML
+  const rawBytes = hasRawData ? rawSourceBytes : 0;
+  const rawTokens = hasRawData ? Math.round(rawBytes / 4) : 0;
 
   // vakBrowse compact perception tokens:
   // Each node in the compact line format is approx 12-15 tokens + 30 header tokens
   const perceivedTokens = isLive ? Math.round(elementsCount * 12 + 30) : 0;
 
   const savedTokens = Math.max(0, rawTokens - perceivedTokens);
-  const savingsPercent = isLive && rawTokens > 0 ? ((savedTokens / rawTokens) * 100).toFixed(1) : '0.0';
+  const savingsPercent = hasRawData && rawTokens > 0 ? ((savedTokens / rawTokens) * 100).toFixed(1) : null;
 
   return (
     <div className="p-2.5 bg-card border border-border rounded-xs font-mono text-xs space-y-2">
@@ -27,7 +28,7 @@ export function TokenSavingsGauge({ elementsCount, rawSourceBytes }: Props) {
           REAL-TIME CONTEXT EFFICIENCY
         </span>
         <span className={isLive ? 'badge-yellow font-bold text-[10px]' : 'badge-dim text-[10px]'}>
-          {isLive ? `${savingsPercent}% REDUCTION` : 'IDLE (0 TOKENS)'}
+          {savingsPercent != null ? `${savingsPercent}% REDUCTION` : isLive ? 'MEASURING...' : 'IDLE (0 TOKENS)'}
         </span>
       </div>
 
@@ -35,11 +36,11 @@ export function TokenSavingsGauge({ elementsCount, rawSourceBytes }: Props) {
       <div className="grid grid-cols-2 gap-2 text-[10px]">
         <div className="p-1.5 bg-bg border border-border/80 rounded-xs space-y-0.5">
           <div className="text-text-muted uppercase">RAW HTML DUMP:</div>
-          <div className={`${isLive ? 'text-danger' : 'text-text-dim'} font-bold text-xs`}>
-            {isLive ? `~${rawTokens.toLocaleString()} TOKENS` : '0 TOKENS'}
+          <div className={`${hasRawData ? 'text-danger' : 'text-text-dim'} font-bold text-xs`}>
+            {hasRawData ? `~${rawTokens.toLocaleString()} TOKENS` : isLive ? 'MEASURING...' : '0 TOKENS'}
           </div>
           <div className="text-text-dim text-[9px]">
-            {isLive ? `${(rawBytes / 1024).toFixed(0)} KB document payload` : 'No document payload'}
+            {hasRawData ? `${(rawBytes / 1024).toFixed(0)} KB document payload` : isLive ? 'Fetching source size...' : 'No document payload'}
           </div>
         </div>
 
@@ -55,7 +56,7 @@ export function TokenSavingsGauge({ elementsCount, rawSourceBytes }: Props) {
       {/* Visual Reduction Bar */}
       <div className="space-y-1">
         <div className="h-2 w-full bg-surface border border-border/60 rounded-xs overflow-hidden flex">
-          {isLive && (
+          {hasRawData && (
             <div
               className="h-full bg-emerald-400 transition-all duration-500"
               style={{ width: `${Math.max(2, (perceivedTokens / Math.max(1, rawTokens)) * 100)}%` }}
@@ -66,11 +67,12 @@ export function TokenSavingsGauge({ elementsCount, rawSourceBytes }: Props) {
           <span className={isLive ? 'text-emerald-400 font-bold' : 'text-text-dim'}>
             {isLive ? 'vakBrowse compact window' : 'Engine ready'}
           </span>
-          <span className={isLive ? 'text-danger' : 'text-text-dim'}>
-            {isLive ? 'Exhausts context window (raw DOM)' : 'Awaiting navigation'}
+          <span className={hasRawData ? 'text-danger' : 'text-text-dim'}>
+            {hasRawData ? 'Exhausts context window (raw DOM)' : isLive ? 'Awaiting source measurement' : 'Awaiting navigation'}
           </span>
         </div>
       </div>
     </div>
   );
 }
+

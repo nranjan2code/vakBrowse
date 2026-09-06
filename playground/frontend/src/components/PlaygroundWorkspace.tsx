@@ -83,7 +83,7 @@ export function PlaygroundWorkspace() {
     let raw = (targetUrl || urlInput || '').trim();
     if (!raw) return;
 
-    if (!raw.startsWith('http://') && !raw.startsWith('https://') && !raw.startsWith('file://') && !raw.startsWith('about:')) {
+    if (!raw.startsWith('http://') && !raw.startsWith('https://') && !raw.startsWith('file://') && !raw.startsWith('about:') && !raw.startsWith('data:')) {
       raw = `https://${raw}`;
     }
 
@@ -244,7 +244,6 @@ export function PlaygroundWorkspace() {
   // Open custom modal session
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
-    setModalLoading(true);
     setModalLoading(true);
     setModalError(null);
     setNavError(null);
@@ -1079,7 +1078,7 @@ export function PlaygroundWorkspace() {
 
           {/* Context Efficiency Telemetry Gauge */}
           <div className="p-2 border-b border-border bg-[#101014] shrink-0">
-            <TokenSavingsGauge elementsCount={session.snapshot?.elements.length || 0} />
+            <TokenSavingsGauge elementsCount={session.snapshot?.elements.length || 0} rawSourceBytes={session.rawSourceBytes} />
           </div>
 
           {/* Drawer Body */}

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- frontend ----
-FROM node:22-bookworm AS frontend
+FROM --platform=linux/amd64 node:22-bookworm AS frontend
 WORKDIR /playground
 COPY playground/frontend/package.json playground/frontend/*.config.* playground/frontend/tsconfig.json ./
 RUN npm install
@@ -9,7 +9,7 @@ COPY playground/frontend/ ./
 RUN NODE_ENV=production npm run build  # outputs to ../static (playground/static)
 
 # ---- build ----
-FROM rust:1-bookworm AS build
+FROM --platform=linux/amd64 rust:1-bookworm AS build
 WORKDIR /src
 COPY --from=frontend /static /src/playground/static
 COPY . .
@@ -18,7 +18,7 @@ RUN cargo build --release -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse
  && ./target/release/vakd doctor --no-probe   # bakes the pinned chrome-headless-shell into the image cache
 
 # ---- runtime ----
-FROM debian:bookworm-slim
+FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates fonts-liberation \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \

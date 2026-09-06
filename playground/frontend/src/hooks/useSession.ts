@@ -26,6 +26,7 @@ export interface BreadcrumbItem {
 export function useSession(sid: SessionId | null) {
   const [snapshotData, setSnapshotData] = useState<Snapshot | null>(null);
   const [liveScreenshot, setLiveScreenshot] = useState<string | null>(null);
+  const [rawSourceBytes, setRawSourceBytes] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ActionResult | null>(null);
@@ -72,16 +73,28 @@ export function useSession(sid: SessionId | null) {
         });
       }
       
-      // Auto-fetch live screenshot from Chromium CDP backend
-      try {
-        const img = await screenshot(sid);
+      // Auto-fetch live screenshot and raw source size in parallel
+      // (both are non-critical — perception tree is the primary data)
+      const [imgRes, srcRes] = await Promise.allSettled([
+        screenshot(sid),
+        source(sid),
+      ]);
+
+      if (imgRes.status === 'fulfilled') {
+        const img = imgRes.value;
         if (img && (img as any).png_base64) {
           setLiveScreenshot((img as any).png_base64);
         } else if (typeof img === 'string') {
           setLiveScreenshot(img);
         }
-      } catch (_) {
-        // Screenshot may fail on some pages; perception tree remains available
+      }
+
+      // Measure real raw HTML source bytes for live token efficiency gauge
+      if (srcRes.status === 'fulfilled') {
+        const srcText = (srcRes.value as any)?.text;
+        if (typeof srcText === 'string') {
+          setRawSourceBytes(new Blob([srcText]).size);
+        }
       }
 
       // Auto-sync session tabs
@@ -138,28 +151,36 @@ export function useSession(sid: SessionId | null) {
         addLog('NAVIGATE', `${actionName.toUpperCase()} completed in ${elapsed}ms`);
       }
 
-      // Auto-refresh snapshot and live screenshot on navigation/mutation-causing actions
-      if (
+      // Determine if this action is purely read-only (no DOM mutation possible)
+      const readOnlyActions = new Set([
+        'extract', 'source', 'screenshot', 'cookies', 'set_cookie', 'clear_cookies',
+        'downloads', 'set_download_dir', 'wait_for_url', 'wait_for_truthy',
+        'web_mcp_tools', 'set_file_chooser',
+      ]);
+
+      // Navigation-causing actions: clear stale element refs
+      const isNavigation =
         actionName === 'navigate' ||
         actionName === 'back' ||
         actionName === 'forward' ||
         actionName === 'reload' ||
         actionName === 'rotate_proxy' ||
+        actionName === 'switch_tab' ||
+        actionName === 'new_tab' ||
+        actionName === 'close_tab' ||
         result?.type === 'navigated' ||
-        (result?.type === 'clicked' && result?.navigated)
-      ) {
-        // Automatically clean up stale element target refs on navigation
+        (result?.type === 'clicked' && result?.navigated);
+
+      if (isNavigation) {
+        // Clear stale element target refs on navigation
         setSelectedRef(null);
         setSelectedNode(null);
         await refresh();
-      } else if (actionName === 'scroll' || actionName === 'click_at') {
-        // Re-capture screenshot after scroll or coordinate click
-        try {
-          const img = await screenshot(sid);
-          if (img && (img as any).png_base64) {
-            setLiveScreenshot((img as any).png_base64);
-          }
-        } catch (_) {}
+      } else if (!readOnlyActions.has(actionName)) {
+        // Any mutation-causing action (click, fill, select, press_key, eval_text,
+        // batch, scroll, click_at, find_by_css, web_mcp_invoke, etc.)
+        // always refresh so the playground stays reactive to page changes
+        await refresh();
       } else if (result?.type === 'snapshot') {
         setSnapshotData(result.snapshot);
       }
@@ -252,6 +273,7 @@ export function useSession(sid: SessionId | null) {
     sid,
     snapshot: snapshotData,
     liveScreenshot,
+    rawSourceBytes,
     loading,
     error,
     lastResult,
