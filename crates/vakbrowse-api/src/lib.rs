@@ -30,7 +30,8 @@ struct ApiState {
 pub fn build_router(manager: Arc<SessionManager>) -> Router {
     let state = ApiState { manager };
 
-    let app = Router::new()
+    #[allow(unused_mut)]
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/sessions", post(open_session).get(list_sessions))
         .route("/sessions/{session}", axum::routing::delete(close_session))
@@ -42,19 +43,16 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
 
     #[cfg(feature = "playground")]
     {
-        let app = app
+        app = app
             .route("/", get(playground_root))
             .route("/playground", get(playground_root))
             .route("/playground/", get(playground_root))
             .route("/playground/{*path}", get(playground_static))
             .route("/assets/{*path}", get(playground_assets))
             .fallback(get(playground_fallback));
-        app.with_state(state)
     }
-    #[cfg(not(feature = "playground"))]
-    {
-        app.with_state(state)
-    }
+
+    app.with_state(state)
 }
 
 /// Directory where the prebuilt frontend lives. Override with

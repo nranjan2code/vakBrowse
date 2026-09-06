@@ -4,9 +4,14 @@ import { useSession } from '../hooks/useSession';
 import { PRESET_SCENARIOS, PresetScenario } from './PresetWorkflows';
 import { ConsoleRepl } from './ConsoleRepl';
 import { CookieManager } from './CookieManager';
+import { DownloadsViewer } from './DownloadsViewer';
+import { WebMcpInspector } from './WebMcpInspector';
 import { BatchStudio } from './BatchStudio';
 import { ExportCodeModal } from './ExportCodeModal';
+import { TourGuide } from './TourGuide';
 import { TokenSavingsGauge } from './TokenSavingsGauge';
+import { TabBar } from './TabBar';
+import { TabManager } from './TabManager';
 import type { SnapshotNode } from '../lib/types';
 
 export function PlaygroundWorkspace() {
@@ -25,8 +30,24 @@ export function PlaygroundWorkspace() {
 
   // View state
   const [viewMode, setViewMode] = useState<'SPLIT' | 'RENDER' | 'TREE'>('SPLIT');
-  const [activeRightTab, setActiveRightTab] = useState<'OUTPUT' | 'CONSOLE' | 'COOKIES' | 'BATCH' | 'WIRE_JSON' | 'LOGS'>('OUTPUT');
+  const [activeRightTab, setActiveRightTab] = useState<'OUTPUT' | 'CONSOLE' | 'TABS' | 'COOKIES' | 'DOWNLOADS' | 'WEBMCP' | 'BATCH' | 'WIRE_JSON' | 'LOGS'>('OUTPUT');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showTourGuide, setShowTourGuide] = useState(false);
+
+  // Interactive Live Canvas State
+  const [visionClickMode, setVisionClickMode] = useState(true);
+  const [clickRipple, setClickRipple] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
+
+  // CSS Selector Resolver State
+  const [cssQuery, setCssQuery] = useState('');
+  const [cssMatches, setCssMatches] = useState<string[]>([]);
+  const [cssSearching, setCssSearching] = useState(false);
+  const [cssMessage, setCssMessage] = useState<string | null>(null);
+
+  // Automated Preset Recipe Runner State
+  const [selectedPreset, setSelectedPreset] = useState<PresetScenario | null>(null);
+  const [recipeRunning, setRecipeRunning] = useState(false);
+  const [recipeStepIndex, setRecipeStepIndex] = useState<number>(-1);
 
   // Modals
   const [showNewModal, setShowNewModal] = useState(false);
@@ -58,8 +79,6 @@ export function PlaygroundWorkspace() {
   }, [session.snapshot?.url, activeSession, sessions.length]);
 
   // Universal Navigate or Open handler:
-  // If no session is active or alive, it automatically launches a new browser session!
-  // If a session is active, it navigates the session to the target URL.
   const handleNavigate = useCallback(async (targetUrl?: string) => {
     let raw = (targetUrl || urlInput || '').trim();
     if (!raw) return;
@@ -104,8 +123,58 @@ export function PlaygroundWorkspace() {
     }
   }, [urlInput, activeSession, sessions, open, session.actions]);
 
+  // Interactive Live Canvas Click-at coordinates dispatch
+  const handleCanvasClick = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!activeSession || !session.liveScreenshot || navigating || session.loading) return;
+    const img = e.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const scaleX = img.naturalWidth / rect.width;
+    const scaleY = img.naturalHeight / rect.height;
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    const x = Math.round(clientX * scaleX);
+    const y = Math.round(clientY * scaleY);
+
+    setClickRipple({ x: clientX, y: clientY, visible: true });
+    setTimeout(() => setClickRipple((prev) => ({ ...prev, visible: false })), 800);
+
+    await session.actions.clickAt(x, y);
+  };
+
+  // Viewport scroll dispatcher
+  const handleScroll = async (dy: number) => {
+    if (!activeSession || navigating || session.loading) return;
+    await session.actions.scroll(0, dy);
+  };
+
+  // CSS Selector resolver
+  const handleFindCss = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!cssQuery.trim() || !activeSession || session.loading) return;
+    setCssSearching(true);
+    setCssMessage(null);
+    try {
+      const res = await session.actions.findByCss(cssQuery.trim());
+      const refs = (res as any)?.refs?.map((r: any) => (typeof r === 'string' ? r : r[0] || r)) || [];
+      setCssMatches(refs);
+      if (refs.length > 0) {
+        setCssMessage(`Found ${refs.length} element(s): ${refs.join(', ')}`);
+        session.setSelectedRef(refs[0]);
+        const node = session.snapshot?.elements.find((el) => el.ref === refs[0]);
+        if (node) session.setSelectedNode(node);
+      } else {
+        setCssMessage(`No interactive elements match '${cssQuery.trim()}'`);
+      }
+    } catch (err: any) {
+      setCssMessage(`CSS match error: ${err.message}`);
+    } finally {
+      setCssSearching(false);
+    }
+  };
+
   // Launch preset scenario
   const handleLaunchPreset = useCallback(async (scenario: PresetScenario) => {
+    setSelectedPreset(scenario);
     setUrlInput(scenario.initialUrl);
     setNavigating(true);
     setNavError(null);
@@ -124,9 +193,58 @@ export function PlaygroundWorkspace() {
     }
   }, [open]);
 
+  // Automated step-by-step recipe runner
+  const handleExecuteRecipe = async () => {
+    if (!selectedPreset || recipeRunning) return;
+    setRecipeRunning(true);
+    setRecipeStepIndex(0);
+    setNavError(null);
+
+    try {
+      // Step 1: Open / Navigate
+      await handleNavigate(selectedPreset.initialUrl);
+      setRecipeStepIndex(1);
+      await new Promise((r) => setTimeout(r, 600));
+
+      if (selectedPreset.id === 'wikipedia-research' || selectedPreset.id === 'hn-intelligence') {
+        setRecipeStepIndex(2);
+        await session.actions.extract();
+        setActiveRightTab('OUTPUT');
+      } else if (selectedPreset.id === 'example-link-proof') {
+        setRecipeStepIndex(2);
+        session.setSelectedRef('@e1');
+        await session.actions.click('@e1');
+        setActiveRightTab('OUTPUT');
+      } else if (selectedPreset.id === 'wikipedia-form-search') {
+        setRecipeStepIndex(2);
+        const searchRef = session.snapshot?.elements.find((e) => e.role === 'textbox')?.ref || '@e1';
+        session.setSelectedRef(searchRef);
+        await session.actions.fill(searchRef, 'Rust programming language');
+        setRecipeStepIndex(3);
+        await session.actions.pressKey('Enter');
+      } else if (selectedPreset.id === 'stealth-probe') {
+        setRecipeStepIndex(2);
+        await session.actions.evalText('navigator.webdriver');
+        setRecipeStepIndex(3);
+        await session.actions.evalText('navigator.userAgent');
+        setActiveRightTab('CONSOLE');
+      } else if (selectedPreset.id === 'batch-pipeline') {
+        setRecipeStepIndex(2);
+        await session.actions.batch([{ type: 'extract' }, { type: 'screenshot', full_page: false }]);
+        setActiveRightTab('OUTPUT');
+      }
+    } catch (err: any) {
+      setNavError(`Recipe execution failed: ${err.message}`);
+    } finally {
+      setRecipeRunning(false);
+      setRecipeStepIndex(-1);
+    }
+  };
+
   // Open custom modal session
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalLoading(true);
     setModalLoading(true);
     setModalError(null);
     setNavError(null);
@@ -262,9 +380,18 @@ export function PlaygroundWorkspace() {
               ✕ CLOSE ALL ({sessions.length})
             </button>
           )}
+          {/* Guided Tour Launcher */}
+          <button
+            onClick={() => setShowTourGuide(true)}
+            className="px-2.5 py-1 bg-surface hover:bg-surface-elevated border border-accent/50 hover:border-accent text-accent rounded-xs text-[11px] font-bold flex items-center gap-1 transition-colors"
+            title="Open guided capability tour"
+          >
+            <span>?</span>
+            <span className="hidden sm:inline">TOUR</span>
+          </button>
         </div>
 
-        {/* Quick Presets Dropdown */}
+        {/* Quick Presets Dropdown & Recipe Runner */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-[10px] text-text-muted uppercase hidden md:inline">PRESET:</span>
           <select
@@ -272,16 +399,38 @@ export function PlaygroundWorkspace() {
               const found = PRESET_SCENARIOS.find((p) => p.id === e.target.value);
               if (found) handleLaunchPreset(found);
             }}
-            defaultValue=""
-            className="input-sm py-0.5 text-[11px] bg-surface text-bone border-border cursor-pointer max-w-[180px]"
+            value={selectedPreset?.id || ''}
+            className="input-sm py-0.5 text-[11px] bg-surface text-bone border-border cursor-pointer max-w-[170px]"
           >
             <option value="" disabled>⚡ Quick Load Recipe...</option>
             {PRESET_SCENARIOS.map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
+          {selectedPreset && (
+            <button
+              onClick={handleExecuteRecipe}
+              disabled={recipeRunning || isLoading}
+              className="btn-primary py-0.5 px-2 text-[10px] uppercase font-bold tracking-wider"
+              title={`Execute ${selectedPreset.name} workflow sequence`}
+            >
+              {recipeRunning ? `STEP ${recipeStepIndex + 1}...` : '⚡ RUN RECIPE'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* MULTI-TAB BROWSER STRIP */}
+      {activeSession && (
+        <TabBar
+          tabs={session.tabs}
+          activeTabId={session.activeTabId}
+          onSwitchTab={(tabId) => session.actions.switchTab(tabId)}
+          onNewTab={(url) => session.actions.newTab(url)}
+          onCloseTab={(tabId) => session.actions.closeTab(tabId)}
+          disabled={isLoading}
+        />
+      )}
 
       {/* 2. BROWSER OMNIBAR & DIRECT ACTIONS */}
       <div className="p-2 border-b border-border bg-surface/90 flex flex-wrap items-center justify-between gap-2 shrink-0">
@@ -376,6 +525,14 @@ export function PlaygroundWorkspace() {
             title="View HTML source"
           >
             &lt;/&gt; SOURCE
+          </button>
+          <button
+            onClick={() => session.actions.rotateProxy()}
+            disabled={isLoading || !activeSession}
+            className="btn-ghost py-1 px-2 text-[11px]"
+            title="Cycle to next proxy endpoint in pool and restore URL"
+          >
+            🔄 ROTATE PROXY
           </button>
           <button
             onClick={() => setActiveRightTab('BATCH')}
@@ -619,19 +776,77 @@ export function PlaygroundWorkspace() {
                 viewMode === 'SPLIT' ? 'flex-1 md:w-1/2' : 'flex-1'
               }`}>
                 <div className="px-3 py-1 bg-surface/80 border-b border-border/80 flex items-center justify-between text-[10px] text-text-muted shrink-0">
-                  <span className="text-bone font-bold uppercase">LIVE SCREEN CANVAS</span>
-                  <span className={session.liveScreenshot ? 'text-emerald-400 font-bold' : 'text-text-muted'}>
-                    {session.liveScreenshot ? 'REAL-TIME CHROMIUM RENDER' : 'AWAITING RENDER'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-bone font-bold uppercase">LIVE SCREEN CANVAS</span>
+                    <span className={session.liveScreenshot ? 'text-emerald-400 font-bold' : 'text-text-muted'}>
+                      {session.liveScreenshot ? 'REAL-TIME CHROMIUM' : 'AWAITING RENDER'}
+                    </span>
+                  </div>
+                  {/* Canvas Controls */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setVisionClickMode(!visionClickMode)}
+                      className={`px-1.5 py-0.5 rounded-xs text-[9px] font-bold transition-colors ${
+                        visionClickMode ? 'bg-accent text-white' : 'bg-surface text-text-dim hover:text-text'
+                      }`}
+                      title="Toggle coordinate vision click"
+                    >
+                      {visionClickMode ? '🎯 VISION CLICK: ON' : '👁️ VISION CLICK: OFF'}
+                    </button>
+                    <button
+                      onClick={() => handleScroll(-400)}
+                      disabled={isLoading || !activeSession}
+                      className="px-1.5 py-0.5 bg-surface hover:bg-surface-elevated text-bone border border-border rounded-xs text-[9px] font-bold"
+                      title="Scroll up 400px"
+                    >
+                      ▲ UP
+                    </button>
+                    <button
+                      onClick={() => handleScroll(400)}
+                      disabled={isLoading || !activeSession}
+                      className="px-1.5 py-0.5 bg-surface hover:bg-surface-elevated text-bone border border-border rounded-xs text-[9px] font-bold"
+                      title="Scroll down 400px"
+                    >
+                      ▼ DOWN
+                    </button>
+                    <button
+                      onClick={() => session.actions.screenshot()}
+                      disabled={isLoading || !activeSession}
+                      className="px-1.5 py-0.5 bg-surface hover:bg-surface-elevated text-accent border border-border rounded-xs text-[9px] font-bold"
+                      title="Force refresh screenshot"
+                    >
+                      ↻
+                    </button>
+                  </div>
                 </div>
-                <div className="flex-1 min-h-0 overflow-y-auto p-3 flex items-start justify-center bg-[radial-gradient(#1f1f26_1px,transparent_1px)] bg-[size:16px_16px]">
+                <div
+                  onWheel={(e) => {
+                    if (activeSession && !isLoading) {
+                      e.preventDefault();
+                      handleScroll(e.deltaY > 0 ? 300 : -300);
+                    }
+                  }}
+                  className="flex-1 min-h-0 overflow-y-auto p-3 flex items-start justify-center bg-[radial-gradient(#1f1f26_1px,transparent_1px)] bg-[size:16px_16px]"
+                >
                   {session.liveScreenshot ? (
-                    <div className="border border-border-strong rounded-xs shadow-2xl overflow-hidden max-w-full relative">
+                    <div className="border border-border-strong rounded-xs shadow-2xl overflow-hidden max-w-full relative select-none">
                       <img
                         src={`data:image/png;base64,${session.liveScreenshot}`}
                         alt="Live Web Page Render"
-                        className="max-w-full h-auto object-contain block"
+                        onClick={visionClickMode ? handleCanvasClick : undefined}
+                        className={`max-w-full h-auto object-contain block ${visionClickMode ? 'cursor-crosshair' : ''}`}
                       />
+                      {clickRipple.visible && (
+                        <div
+                          className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-accent bg-accent/40 animate-ping z-20"
+                          style={{
+                            left: clickRipple.x,
+                            top: clickRipple.y,
+                            width: '28px',
+                            height: '28px',
+                          }}
+                        />
+                      )}
                     </div>
                   ) : activeSession && session.snapshot ? (
                     <div className="p-6 text-center text-text-dim my-auto space-y-3 max-w-md">
@@ -684,9 +899,48 @@ export function PlaygroundWorkspace() {
               <div className={`flex flex-col min-h-0 overflow-hidden bg-bg ${
                 viewMode === 'SPLIT' ? 'flex-1 md:w-1/2' : 'flex-1'
               }`}>
-                <div className="px-3 py-1 bg-surface/80 border-b border-border/80 flex items-center justify-between text-[10px] text-text-muted shrink-0">
-                  <span className="text-bone font-bold uppercase">ACCESSIBILITY TREE (&lt;500 TOKENS)</span>
-                  <span>CLICK ANY NODE TO ACT</span>
+                <div className="px-3 py-1.5 bg-surface/90 border-b border-border/80 flex flex-col gap-1.5 shrink-0">
+                  <div className="flex items-center justify-between text-[10px] text-text-muted">
+                    <span className="text-bone font-bold uppercase">ACCESSIBILITY TREE (&lt;500 TOKENS)</span>
+                    <span>{session.snapshot?.elements.length || 0} NODES</span>
+                  </div>
+                  {/* CSS Selector Resolver */}
+                  <form onSubmit={handleFindCss} className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={cssQuery}
+                      onChange={(e) => setCssQuery(e.target.value)}
+                      placeholder="Find by CSS (e.g. a[href*='wiki'], button)..."
+                      disabled={isLoading || !activeSession}
+                      className="input-sm flex-1 text-[11px] py-0.5"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isLoading || !activeSession || !cssQuery.trim()}
+                      className="btn-secondary py-0.5 px-2 text-[10px] font-bold shrink-0"
+                    >
+                      {cssSearching ? 'FINDING...' : 'FIND CSS ›'}
+                    </button>
+                    {cssMatches.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCssMatches([]);
+                          setCssMessage(null);
+                          setCssQuery('');
+                        }}
+                        className="text-text-muted hover:text-danger text-[10px] px-1"
+                        title="Clear matches"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </form>
+                  {cssMessage && (
+                    <div className="text-[10px] text-accent truncate">
+                      {cssMessage}
+                    </div>
+                  )}
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
                   {!session.snapshot || session.snapshot.elements.length === 0 ? (
@@ -696,6 +950,7 @@ export function PlaygroundWorkspace() {
                   ) : (
                     session.snapshot.elements.map((el) => {
                       const isSelected = session.selectedRef === el.ref;
+                      const isCssMatch = cssMatches.includes(el.ref);
                       return (
                         <div
                           key={el.ref}
@@ -706,12 +961,14 @@ export function PlaygroundWorkspace() {
                           className={`p-2 rounded-xs border cursor-pointer transition-all flex items-center justify-between gap-2 ${
                             isSelected
                               ? 'bg-accent/15 border-accent shadow-xs'
+                              : isCssMatch
+                              ? 'bg-accent/10 border-accent'
                               : 'bg-card border-border hover:border-border-strong hover:bg-surface/60'
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <span className={`w-11 text-center py-0.5 rounded-xs text-[11px] font-bold font-mono ${
-                              isSelected ? 'bg-accent text-white' : 'bg-surface border border-border text-accent'
+                              isSelected ? 'bg-accent text-white' : isCssMatch ? 'bg-accent text-white' : 'bg-surface border border-border text-accent'
                             }`}>
                               {el.ref}
                             </span>
@@ -763,12 +1020,36 @@ export function PlaygroundWorkspace() {
               CONSOLE
             </button>
             <button
+              onClick={() => setActiveRightTab('TABS')}
+              className={`px-3 py-2 text-center font-bold tracking-wider transition-colors whitespace-nowrap ${
+                activeRightTab === 'TABS' ? 'bg-card text-bone border-b-2 border-accent' : 'text-text-dim hover:text-text'
+              }`}
+            >
+              TABS
+            </button>
+            <button
               onClick={() => setActiveRightTab('COOKIES')}
               className={`px-3 py-2 text-center font-bold tracking-wider transition-colors whitespace-nowrap ${
                 activeRightTab === 'COOKIES' ? 'bg-card text-bone border-b-2 border-accent' : 'text-text-dim hover:text-text'
               }`}
             >
               COOKIES
+            </button>
+            <button
+              onClick={() => setActiveRightTab('DOWNLOADS')}
+              className={`px-3 py-2 text-center font-bold tracking-wider transition-colors whitespace-nowrap ${
+                activeRightTab === 'DOWNLOADS' ? 'bg-card text-bone border-b-2 border-accent' : 'text-text-dim hover:text-text'
+              }`}
+            >
+              DOWNLOADS
+            </button>
+            <button
+              onClick={() => setActiveRightTab('WEBMCP')}
+              className={`px-3 py-2 text-center font-bold tracking-wider transition-colors whitespace-nowrap ${
+                activeRightTab === 'WEBMCP' ? 'bg-card text-bone border-b-2 border-accent' : 'text-text-dim hover:text-text'
+              }`}
+            >
+              WEBMCP
             </button>
             <button
               onClick={() => setActiveRightTab('BATCH')}
@@ -927,10 +1208,43 @@ export function PlaygroundWorkspace() {
               />
             )}
 
+            {activeRightTab === 'TABS' && (
+              <TabManager
+                tabs={session.tabs}
+                activeTabId={session.activeTabId}
+                onSwitchTab={(tabId) => session.actions.switchTab(tabId)}
+                onNewTab={(url) => session.actions.newTab(url)}
+                onCloseTab={(tabId) => session.actions.closeTab(tabId)}
+                onRefreshTabs={() => session.actions.listTabs()}
+                loading={session.loading}
+                disabled={!activeSession}
+              />
+            )}
+
             {activeRightTab === 'COOKIES' && (
               <CookieManager
                 onGetCookies={() => session.actions.getCookies()}
                 onSetCookie={(c) => session.actions.setCookie(c)}
+                onClearCookies={() => session.actions.clearCookies()}
+                loading={session.loading}
+                disabled={!activeSession}
+                currentUrl={session.snapshot?.url}
+              />
+            )}
+
+            {activeRightTab === 'DOWNLOADS' && (
+              <DownloadsViewer
+                onGetDownloads={() => session.actions.getDownloads()}
+                onSetDownloadDir={(d) => session.actions.setDownloadDir(d)}
+                loading={session.loading}
+                disabled={!activeSession}
+              />
+            )}
+
+            {activeRightTab === 'WEBMCP' && (
+              <WebMcpInspector
+                onGetTools={() => session.actions.webmcpTools()}
+                onInvokeTool={(name, argsJson) => session.actions.webmcpInvoke(name, argsJson)}
                 loading={session.loading}
                 disabled={!activeSession}
                 currentUrl={session.snapshot?.url}
@@ -1077,6 +1391,12 @@ export function PlaygroundWorkspace() {
         onClose={() => setShowExportModal(false)}
         url={session.snapshot?.url || urlInput}
         selectedRef={session.selectedRef}
+      />
+
+      {/* GUIDED CAPABILITY TOUR MODAL */}
+      <TourGuide
+        visible={showTourGuide}
+        onClose={() => setShowTourGuide(false)}
       />
     </div>
   );

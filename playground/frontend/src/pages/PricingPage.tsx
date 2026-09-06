@@ -51,7 +51,7 @@ export function PricingPage({ onNavigate }: PricingPageProps) {
               </li>
               <li className="flex items-center gap-2">
                 <span className="text-emerald-400">✓</span>
-                <span>34 WebMCP Tools (Claude & Cursor)</span>
+                <span>35 Native MCP Tools (Claude & Cursor)</span>
               </li>
               <li className="flex items-center gap-2">
                 <span className="text-emerald-400">✓</span>
@@ -213,7 +213,7 @@ export function PricingPage({ onNavigate }: PricingPageProps) {
                 <td className="py-2 px-3 text-emerald-400">Included</td>
               </tr>
               <tr>
-                <td className="py-2 px-3 text-bone">WebMCP 34 Tools (Stdio Normalizer)</td>
+                <td className="py-2 px-3 text-bone">Native MCP 35 Tools (Stdio Normalizer)</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>
                 <td className="py-2 px-3 text-emerald-400">Included</td>

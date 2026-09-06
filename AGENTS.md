@@ -202,8 +202,8 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   34 browser_* (tabs, history, screenshot/click-at,
-                        #   extract, webmcp, wait_url, stealth/proxy on open,
+                        #   35 browser_* (tabs, history, screenshot/click-at,
+                        #   extract, cookies, webmcp, wait_url, stealth/proxy on open,
                         #   set_file_chooser, source, downloads);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
                         #   endpoints map 1:1 onto Request model. `--features

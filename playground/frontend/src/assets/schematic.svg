@@ -89,7 +89,7 @@
     <g transform="translate(80, 395)">
       <rect width="320" height="105" fill="#171a21" stroke="#ff4400" stroke-opacity="0.4" stroke-width="1" rx="2" />
       <text x="15" y="25" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="700" fill="#f0f0f0">vak-mcp (MCP Server)</text>
-      <text x="15" y="45" font-family="'JetBrains Mono', monospace" font-size="10" fill="#88909f">34 Native Model Context Protocol Tools</text>
+      <text x="15" y="45" font-family="'JetBrains Mono', monospace" font-size="10" fill="#88909f">35 Native Model Context Protocol Tools</text>
       <text x="15" y="65" font-family="'JetBrains Mono', monospace" font-size="9" fill="#88909f">StdioFramer: Content-Length + NDJSON</text>
       <text x="15" y="85" font-family="'JetBrains Mono', monospace" font-size="9" fill="#ff4400">Claude Code • Cursor • opencode</text>
       <circle cx="305" cy="20" r="3" fill="#22c55e" />

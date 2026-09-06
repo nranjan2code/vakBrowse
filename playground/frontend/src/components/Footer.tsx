@@ -114,7 +114,7 @@ export function Footer({ onSelectTab }: FooterProps) {
             </div>
             <div className="flex justify-between">
               <span className="text-text-muted">MCP TOOLS EXPOSED:</span>
-              <span className="text-bone font-semibold">34 DISPATCHABLE</span>
+              <span className="text-bone font-semibold">35 DISPATCHABLE</span>
             </div>
             <div className="flex justify-between">
               <span className="text-text-muted">MEMORY FOOTPRINT:</span>

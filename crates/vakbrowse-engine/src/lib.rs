@@ -177,9 +177,8 @@ impl ClickResult {
 }
 
 /// Factory for pages. Implemented by each backend and held by the session
-/// manager as a trait object so the CDP backend is a plug-in, not a baked-in
-/// dependency — a different backend crates a different `EngineLauncher` and
-/// injects it via `SessionManager::new`.
+/// manager so the CDP backend is a plug-in, not a baked-in dependency —
+/// a different backend would provide a different `EngineLauncher` implementation.
 #[async_trait::async_trait]
 pub trait EngineLauncher: Send + Sync {
     fn name(&self) -> &'static str;

@@ -162,10 +162,10 @@ vak --socket /tmp/vakd.sock extract s1`}
                   Model Context Protocol (`vak-mcp`)
                 </h3>
                 <p className="text-xs text-text-dim font-sans mt-0.5">
-                  34 browser automation tools over stdio. Built-in StdioFramer handles both NDJSON and Content-Length protocols.
+                  35 browser automation tools over stdio. Built-in StdioFramer handles both NDJSON and Content-Length protocols.
                 </p>
               </div>
-              <span className="badge-yellow">34 TOOLS</span>
+              <span className="badge-yellow">35 TOOLS</span>
             </div>
 
             <div className="space-y-2">
@@ -187,25 +187,61 @@ vak --socket /tmp/vakd.sock extract s1`}
             </div>
 
             <div className="space-y-2">
-              <div className="text-xs font-mono text-text-dim uppercase">02 // AVAILABLE MCP TOOLS</div>
+              <div className="text-xs font-mono text-text-dim uppercase">02 // AVAILABLE MCP TOOLS (35 NATIVE TOOLS)</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs font-mono">
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_open</span>: Open session
+                  <span className="text-accent font-bold">browser_open</span>: Open session (stealth, proxy)
                 </div>
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_snapshot</span>: Accessibility graph
+                  <span className="text-accent font-bold">browser_snapshot</span>: Accessibility perception graph
                 </div>
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_click</span>: Box-model click
+                  <span className="text-accent font-bold">browser_click</span>: Box-model trusted mouse click
                 </div>
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_fill</span>: Native input setter
+                  <span className="text-accent font-bold">browser_fill</span>: Native prototype input setter
                 </div>
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_extract</span>: Readability text
+                  <span className="text-accent font-bold">browser_extract</span>: Readability text (&lt;500 tokens)
                 </div>
                 <div className="p-2 bg-surface border border-border rounded-xs">
-                  <span className="text-accent font-bold">browser_rotate_proxy</span>: Cycle IP
+                  <span className="text-accent font-bold">browser_rotate_proxy</span>: Cycle IP & restore URL
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_click_at</span>: Vision coordinate click (x, y)
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_scroll</span>: Smooth viewport scroll (dx, dy)
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_find_element</span>: CSS selector to @eN refs
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_batch</span>: Atomic fail-fast batch pipeline
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_cookies</span>: List session cookies
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_set_cookie</span>: Inject custom auth cookie
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_clear_cookies</span>: Clear all session cookies
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_downloads</span>: Completed session downloads
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_webmcp_tools</span>: Discover page WebMCP tools
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_webmcp_invoke</span>: Call page-declared tool
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_tabs</span>: Multi-tab registry
+                </div>
+                <div className="p-2 bg-surface border border-border rounded-xs">
+                  <span className="text-accent font-bold">browser_wait_url</span>: SPA-safe route wait
                 </div>
               </div>
             </div>

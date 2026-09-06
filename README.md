@@ -16,7 +16,7 @@ vakBrowse/
 │   ├── vakbrowse-stealth     # fingerprint profiles + humanized input
 │   ├── vakbrowse-server      # SessionManager, command model, policy, UDS protocol
 │   ├── vakbrowse-cli         # `vak` binary
-│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 34 browser_*
+│   ├── vakbrowse-mcp         # `vak-mcp`: MCP server, 35 browser_*
 │   ├── vakbrowse-api         # `vakd-rest`: axum REST + WebSocket bridge
 │   ├── vakbrowse-ffi         # cdylib: embed in Python/Node/Go via C ABI
 ├── bins/vakd                 # daemon (session pool, profiles, policy)
@@ -34,7 +34,7 @@ capability once, all five surfaces get it.
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
   scroll/wait; cookies + persistent profiles.
 - **Surfaces (P2–P3)** — `vakd` daemon over UDS; `vak` CLI; `vak-mcp`
-  (**34 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
+  (**35 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
   `libvakbrowse_ffi` cdylib (Python ctypes drives full flows in-process);
   Docker image with the pinned engine baked in.
 - **Agent-grade capabilities (P4)** — stealth fingerprints + humanized

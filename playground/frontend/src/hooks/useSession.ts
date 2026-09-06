@@ -6,7 +6,7 @@ import {
   setFileChooser, scroll, clickAt, rotateProxy, webmcpTools, webmcpInvoke,
   listTabs, newTab, switchTab, closeTab,
 } from '../lib/actions';
-import type { SessionId, Snapshot, ElementRef, ActionResult, Cookie, SnapshotNode } from '../lib/types';
+import type { SessionId, Snapshot, ElementRef, ActionResult, Cookie, SnapshotNode, TabInfo } from '../lib/types';
 
 export interface ActivityLogItem {
   id: string;
@@ -33,6 +33,8 @@ export function useSession(sid: SessionId | null) {
   const [selectedNode, setSelectedNode] = useState<SnapshotNode | null>(null);
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [historyTrail, setHistoryTrail] = useState<BreadcrumbItem[]>([]);
+  const [tabs, setTabs] = useState<TabInfo[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   const addLog = useCallback((type: ActivityLogItem['type'], summary: string, details?: string) => {
     const item: ActivityLogItem = {
@@ -81,6 +83,19 @@ export function useSession(sid: SessionId | null) {
       } catch (_) {
         // Screenshot may fail on some pages; perception tree remains available
       }
+
+      // Auto-sync session tabs
+      try {
+        const tabsRes = await listTabs(sid);
+        if (tabsRes && (tabsRes as any).type === 'tabs') {
+          const tList = (tabsRes as any).tabs || [];
+          setTabs(tList);
+          setActiveTabId((curr) => {
+            if (curr && tList.some((t: TabInfo) => t.id === curr)) return curr;
+            return tList.length > 0 ? tList[0].id : null;
+          });
+        }
+      } catch (_) {}
     } catch (e: any) {
       setError(e.message);
       addLog('ERROR', `Snapshot failed: ${e.message}`);
@@ -204,10 +219,32 @@ export function useSession(sid: SessionId | null) {
     rotateProxy: () => runAction('rotate_proxy', () => rotateProxy(sid!)),
     webmcpTools: () => runAction('web_mcp_tools', () => webmcpTools(sid!)),
     webmcpInvoke: (name: string, argsJson: string) => runAction('web_mcp_invoke', () => webmcpInvoke(sid!, name, argsJson)),
-    listTabs: () => runAction('tabs', () => listTabs(sid!)),
-    newTab: (url?: string) => runAction('new_tab', () => newTab(sid!, url)),
-    switchTab: (tab: string) => runAction('switch_tab', () => switchTab(sid!, tab)),
-    closeTab: (tab: string) => runAction('close_tab', () => closeTab(sid!, tab)),
+    listTabs: () =>
+      runAction('tabs', async () => {
+        const res = await listTabs(sid!);
+        if (res && (res as any).type === 'tabs') {
+          setTabs((res as any).tabs || []);
+        }
+        return res;
+      }),
+    newTab: (url?: string) =>
+      runAction('new_tab', async () => {
+        const res = await newTab(sid!, url);
+        if (res && (res as any).type === 'tab_opened') {
+          setActiveTabId((res as any).tab.id);
+        }
+        return res;
+      }),
+    switchTab: (tab: string) =>
+      runAction('switch_tab', async () => {
+        setActiveTabId(tab);
+        return await switchTab(sid!, tab);
+      }),
+    closeTab: (tab: string) =>
+      runAction('close_tab', async () => {
+        const res = await closeTab(sid!, tab);
+        return res;
+      }),
     batch: (actionsList: unknown[]) => runAction('batch', () => batch(sid!, actionsList)),
   };
 
@@ -222,6 +259,9 @@ export function useSession(sid: SessionId | null) {
     selectedNode,
     activityLogs,
     historyTrail,
+    tabs,
+    activeTabId,
+    setActiveTabId,
     setSelectedRef,
     setSelectedNode,
     setLastResult,

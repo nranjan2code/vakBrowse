@@ -34,7 +34,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
 
               <p className="text-base sm:text-lg text-text-dim leading-relaxed font-sans max-w-2xl">
                 Standard browsers and test drivers waste 50,000 tokens of HTML noise on every page turn.
-                Powered by a headless Chromium core, <span className="text-bone font-medium">vakBrowse</span> is a high-speed Rust runtime that compresses the live accessibility tree into <span className="text-yellow font-mono font-semibold">&lt;500 tokens</span> of actionable references (<code className="text-accent bg-card px-1 py-0.5 rounded-xs">@e42</code>) with trusted hardware mouse events and 34 native MCP tools.
+                Powered by a headless Chromium core, <span className="text-bone font-medium">vakBrowse</span> is a high-speed Rust runtime that compresses the live accessibility tree into <span className="text-yellow font-mono font-semibold">&lt;500 tokens</span> of actionable references (<code className="text-accent bg-card px-1 py-0.5 rounded-xs">@e42</code>) with trusted hardware mouse events and 35 native MCP tools.
               </p>
 
               {/* Action buttons */}
@@ -69,7 +69,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
                 </div>
                 <div>
                   <div className="text-[10px] text-text-muted">NATIVE PROTOCOL</div>
-                  <div className="text-bone font-bold text-sm sm:text-base text-accent">34 MCP TOOLS</div>
+                  <div className="text-bone font-bold text-sm sm:text-base text-accent">35 MCP TOOLS</div>
                 </div>
               </div>
             </div>
@@ -242,7 +242,7 @@ URL:  https://en.wikipedia.org/wiki/Artificial_intelligence
               </div>
             </div>
             <div className="p-3 bg-surface border border-border rounded-xs">
-              <div className="text-accent font-bold">04 // 34 WEBMCP TOOLS</div>
+              <div className="text-accent font-bold">04 // 35 MCP TOOLS</div>
               <div className="text-text-dim text-[11px] mt-1">
                 Stdio transducer supporting both NDJSON and spec-literal Content-Length framings for Claude Code & Cursor.
               </div>
