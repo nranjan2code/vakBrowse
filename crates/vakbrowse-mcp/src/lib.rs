@@ -76,6 +76,10 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                         json!({"type":"array","items":{"type":"string"},"description":"proxy rotation pool (2+ endpoints); rotate-proxy cycles them to escape IP-reputation walls"}),
                     ),
                     (
+                        "click_recovery",
+                        json!({"type":"boolean","description":"if a link click doesn't navigate, force it (DOM click + location.href). Re-fires page handlers — only for click-blocking sites; default false"}),
+                    ),
+                    (
                         "human_timing",
                         json!({"type":"boolean","description":"inject randomized delays before input actions to mask robotic cadence"}),
                     ),
@@ -556,6 +560,9 @@ impl VakMcp {
                     human_timing: arg(args, "human_timing")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
+                    click_recovery: arg(args, "click_recovery")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 },
             },
             "browser_close" => Request::Close {
@@ -860,7 +867,7 @@ fn fmt_action(a: &vakbrowse_server::ActionResult) -> String {
             if *navigated {
                 format!("navigated to {}", url.as_deref().unwrap_or(""))
             } else {
-                "no navigation (possible bot wall / JS-handler click)".to_string()
+                "no navigation (JS-handler click, non-navigating link, or bot wall; reopen with click_recovery=true to force it — this re-fires page handlers)".to_string()
             }
         }
         vakbrowse_server::ActionResult::Image { .. } => "(screenshot)".into(),

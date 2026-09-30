@@ -33,6 +33,12 @@ pub struct LaunchOptions {
     /// agent's timing isn't robotic (defeats cadence-based behavioral tells;
     /// stealth stays honest — it does NOT fake TLS/HTTP2 fingerprints).
     pub human_timing: bool,
+    /// When a real `<a href>` click produces no navigation, escalate to a DOM
+    /// `.click()` and then a forced `location.href = href`. Off by default:
+    /// the escalation re-fires the element's handlers, so a link whose JS
+    /// handler already did something (add-to-cart, vote, delete) would run it
+    /// up to three times. Enable only for known click-blocking sites.
+    pub click_recovery: bool,
 }
 
 impl Default for LaunchOptions {
@@ -46,6 +52,7 @@ impl Default for LaunchOptions {
             stealth: None,
             proxy_server: None,
             human_timing: false,
+            click_recovery: false,
         }
     }
 }

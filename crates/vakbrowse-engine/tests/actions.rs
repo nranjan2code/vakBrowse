@@ -207,7 +207,13 @@ async fn click_recovers_from_preventdefault_wall() {
     let _g = common::browser_lock().acquire().await.unwrap();
     use vakbrowse_engine::ClickResult;
     let launcher = CdpLauncher::default();
-    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    let mut session = launcher
+        .launch(&LaunchOptions {
+            click_recovery: true,
+            ..LaunchOptions::default()
+        })
+        .await
+        .unwrap();
     session
         .navigate(&fixture_url("blocked.html"))
         .await
@@ -235,6 +241,28 @@ async fn click_recovers_from_preventdefault_wall() {
 
     let landed = session.snapshot().await.unwrap();
     assert!(landed.title.contains("Form"));
+}
+
+/// Without the opt-in, a blocked anchor click is reported honestly and the
+/// page's handler is NOT re-fired by a DOM click / forced navigation.
+#[tokio::test]
+async fn click_recovery_is_off_by_default() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session
+        .navigate(&fixture_url("blocked.html"))
+        .await
+        .unwrap();
+    let snap = session.snapshot().await.unwrap();
+    let blocked = find(&snap, "link", "click blocked").unwrap().clone();
+
+    let out = session.click(&blocked).await.unwrap();
+    assert!(!out.navigated, "must not force navigation, got {out:?}");
+    assert!(
+        session.snapshot().await.unwrap().url.ends_with("blocked.html"),
+        "must stay on the blocked page"
+    );
 }
 
 #[tokio::test]

@@ -172,7 +172,7 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **88 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **92 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
@@ -234,6 +234,15 @@ playground/
 
 ## Key facts
 
+- Engine freshness/integrity: the `{channel}.version` marker is trusted for 24h
+  (`VAKBROWSE_CFT_REFRESH_HOURS`); when stale the manifest is re-checked and a
+  newer Chrome is downloaded, while an unreachable manifest falls back to the
+  cached build with a WARN. Chrome-for-Testing publishes no checksums, so
+  integrity is operator-pinned: the archive's SHA-256 is logged at info on
+  download and `VAKBROWSE_CFT_SHA256` enforces it. Also
+  `VAKBROWSE_CFT_VERSION` (exact pin — no auto-update),
+  `VAKBROWSE_CFT_CHANNEL`, `VAKBROWSE_CFT_MANIFEST_URL` (mirror). Old versions
+  are not pruned from the cache.
 - Engine binary: chrome-headless-shell, cached at
   `~/Library/Caches/vakbrowse/cft/{version}/{platform}/…` with a
   `{channel}.version` marker for offline reuse. System Chrome is the offline
@@ -284,9 +293,14 @@ playground/
   `navigated:false` in O(1) — no latency tax on the common click) and uses URL
   mutation as the sole signal (not the unreliable `wait_for_navigation`
   result). Bot-wall clicks (Bing/DDG accept the click but never navigate)
-  surface as `navigated:false` + a daemon WARN, then **recover** via a
-  ground-truth DOM `.click()` and a forced `location.href =` assignment before
-  giving up honestly (see `click_recovers_from_preventdefault_wall`).
+  surface as `navigated:false` + a daemon WARN. **Recovery is opt-in**
+  (`SessionOptions.click_recovery` / `--click-recovery` / `browser_open
+  {click_recovery:true}`): only then does it escalate to a ground-truth DOM
+  `.click()` and a forced `location.href =` assignment (see
+  `click_recovers_from_preventdefault_wall`). It is off by default because the
+  escalation re-fires the element's handlers — a link whose JS handler already
+  did something (add-to-cart, vote, delete) would run up to three times
+  (`click_recovery_is_off_by_default`).
 - `fill` focuses the element before setting its value; the human pattern
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
   Note for agent loops: on client-side SPAs (e.g. Wikipedia) `document.readyState`

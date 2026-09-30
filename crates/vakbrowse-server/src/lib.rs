@@ -55,6 +55,11 @@ pub struct SessionOptions {
     /// timing isn't robotic (cadence-based behavioral tell). Off by default.
     #[serde(default)]
     pub human_timing: bool,
+    /// Escalate a no-op anchor click to a DOM click and a forced
+    /// `location.href` (defeats click-blocking sites, but re-fires the
+    /// element's handlers — see `LaunchOptions::click_recovery`).
+    #[serde(default)]
+    pub click_recovery: bool,
 }
 
 fn default_true() -> bool {
@@ -71,6 +76,7 @@ impl Default for SessionOptions {
             proxy: None,
             proxies: Vec::new(),
             human_timing: false,
+            click_recovery: false,
         }
     }
 }
@@ -655,6 +661,7 @@ impl SessionManager {
                 .map(vakbrowse_stealth::StealthProfile::generate),
             proxy_server: launch_proxy(&options),
             human_timing: options.human_timing,
+            click_recovery: options.click_recovery,
             ..LaunchOptions::default()
         };
         if let Some(profile) = &options.profile {

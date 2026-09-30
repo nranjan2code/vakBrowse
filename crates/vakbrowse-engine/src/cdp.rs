@@ -310,6 +310,7 @@ impl EngineLauncher for CdpLauncher {
             stealth: options.stealth.clone(),
             pointer: (0.0, 0.0),
             human_timing: options.human_timing,
+            click_recovery: options.click_recovery,
             download_dir: None,
         }))
     }
@@ -356,6 +357,7 @@ pub struct CdpSession {
     stealth: Option<vakbrowse_stealth::StealthProfile>,
     pointer: (f64, f64),
     human_timing: bool,
+    click_recovery: bool,
     download_dir: Option<PathBuf>,
 }
 
@@ -1655,8 +1657,9 @@ impl CdpSession {
         }
     }
 
-    /// Detect whether an anchor click navigated, escalating through progressively
-    /// less-synthetic navigation on a bot wall. The agent always gets a `url`
+    /// Detect whether an anchor click navigated and, when `click_recovery` is
+    /// enabled, escalate through progressively less-synthetic navigation on a
+    /// bot wall. The agent always gets a `url`
     /// either way: `navigated:true` with the landed page, or `navigated:false`
     /// (after recovery is exhausted) so the branch is explicit.
     ///
@@ -1678,6 +1681,15 @@ impl CdpSession {
         let page = self.tab().page.clone();
         if let Some(url) = Self::wait_url_change(&page, &before, CLICK_NAV_TIMEOUT).await {
             return self.reconcile_click_navigation(url).await;
+        }
+
+        if !self.click_recovery {
+            // The trusted click already ran the element's handlers once;
+            // re-firing them is only safe when the caller opted in.
+            tracing::warn!(
+                "click on <a href={href}> produced no navigation; recovery is off (open with click_recovery to force it)"
+            );
+            return Ok(ClickResult::stayed());
         }
 
         // 2. Ground-truth DOM click on the resolved element.

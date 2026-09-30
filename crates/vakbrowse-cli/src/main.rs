@@ -43,6 +43,10 @@ enum Command {
         /// timing isn't robotic (cadence-based behavioral tell).
         #[arg(long)]
         human_timing: bool,
+        /// If a link click does not navigate, force it via DOM click and
+        /// `location.href`. Re-fires page handlers; use only on click-blocking sites.
+        #[arg(long)]
+        click_recovery: bool,
     },
     /// Close a session.
     Close { session: String },
@@ -186,6 +190,7 @@ fn to_request(cmd: Command) -> Result<Request, String> {
             proxy,
             proxies,
             human_timing,
+            click_recovery,
         } => Request::Open {
             options: SessionOptions {
                 profile: profile.as_ref().map(vakbrowse_core::ProfileId::new),
@@ -195,6 +200,7 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 proxy,
                 proxies,
                 human_timing,
+                click_recovery,
             },
         },
         Command::Close { session } => Request::Close {
@@ -393,7 +399,7 @@ fn format_action_result(action: vakbrowse_server::ActionResult) -> String {
             if navigated {
                 format!("navigated to {}", url.as_deref().unwrap_or(""))
             } else {
-                "no navigation (possible bot wall / JS-handler click)".into()
+                "no navigation (JS-handler click, non-navigating link, or bot wall; reopen with --click-recovery to force it — re-fires page handlers)".into()
             }
         }
         vakbrowse_server::ActionResult::Image { png_base64 } => save_screenshot(&png_base64),

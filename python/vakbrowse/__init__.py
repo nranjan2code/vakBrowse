@@ -102,6 +102,7 @@ class Session:
         proxies: list[str] | None = None,
         proxy: str | None = None,
         human_timing: bool = False,
+        click_recovery: bool = False,
         profile: str | None = None,
         headed: bool = False,
     ) -> tuple[str, str]:
@@ -119,6 +120,8 @@ class Session:
             opts["proxies"] = list(proxies)
         if human_timing:
             opts["human_timing"] = True
+        if click_recovery:
+            opts["click_recovery"] = True
         info = self._payload({"type": "open", "options": opts})["Opened"]
         return info["id"], info["url"]
 
