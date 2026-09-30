@@ -502,3 +502,35 @@ async fn click_through_to_disallowed_origin_is_caught() {
     );
     manager.handle(Request::Close { session }).await.unwrap();
 }
+
+#[tokio::test]
+async fn session_url_follows_click_driven_navigation() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let other = serve_html("<p>elsewhere</p>".into()).await;
+    let home = serve_html(format!("<a href=\"http://127.0.0.1:{other}/\">out</a>")).await;
+    let manager = SessionManager::default();
+    let resp = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(format!("http://127.0.0.1:{home}/")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap();
+    let ResponsePayload::Opened(info) = resp else {
+        panic!("open failed: {resp:?}")
+    };
+    for action in [Action::Snapshot, Action::Click { r#ref: "@e1".into() }] {
+        manager
+            .handle(Request::Act {
+                session: info.id.clone(),
+                action,
+            })
+            .await
+            .unwrap();
+    }
+    let listed = manager.list().await;
+    assert_eq!(listed[0].url, format!("http://127.0.0.1:{other}/"));
+    manager.close(&info.id).await.unwrap();
+}

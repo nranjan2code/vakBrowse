@@ -613,11 +613,7 @@ impl SessionManager {
                 .stealth_seed
                 .as_deref()
                 .map(vakbrowse_stealth::StealthProfile::generate),
-            proxy_server: options
-                .proxies
-                .first()
-                .cloned()
-                .or_else(|| options.proxy.clone()),
+            proxy_server: launch_proxy(&options),
             human_timing: options.human_timing,
             ..LaunchOptions::default()
         };
@@ -641,11 +637,7 @@ impl SessionManager {
         // `backend` field.
         let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
         let id = self.next_session_id().await;
-        let init_proxy_idx = if options.proxies.is_empty() {
-            0
-        } else {
-            options.proxies.len() - 1
-        };
+        let init_proxy_idx = INITIAL_PROXY_IDX;
         let mut managed = ManagedSession {
             id: id.clone(),
             profile: options.profile.clone(),
@@ -732,7 +724,7 @@ impl SessionManager {
                 "RotateProxy needs a proxy pool of 2+ endpoints (open with proxies=[a,b,…])".into(),
             ));
         }
-        let next = (idx + 1) % n;
+        let next = rotation_target(idx, n);
         let mut launch = opts.clone();
         launch.proxy_server = Some(pool[next].clone());
 
@@ -812,6 +804,22 @@ impl SessionManager {
         if let Some(s) = self.sessions.lock().await.get_mut(id) {
             s.last_active = std::time::Instant::now();
         }
+
+        // Actions that cannot move the page skip the post-action URL probe.
+        let observes_only = matches!(
+            action,
+            Action::Cookies
+                | Action::Tabs
+                | Action::Screenshot { .. }
+                | Action::Source
+                | Action::Downloads
+                | Action::WebMcpTools
+                | Action::Extract
+                | Action::FindByCss { .. }
+                | Action::SetCookie { .. }
+                | Action::ClearCookies
+                | Action::SetDownloadDir { .. }
+        );
 
         let result = match action {
             // Handled before the page lock is acquired (re-launches the browser).
@@ -969,18 +977,27 @@ impl SessionManager {
         };
 
         // Page-driven navigation (link clicks, redirects, history, JS) never
-        // passes through `navigate`, so re-check where the page actually is.
-        // A violation parks the tab on about:blank and surfaces a Policy error.
-        // Subresource and iframe loads are not covered by this check.
-        if self.policy.restricted()
+        // passes through `navigate`, so ask the page where it actually is.
+        // This keeps `current_url` (used by `list()` and proxy rotation) true,
+        // and enforces the allowlist: a violation parks the tab on
+        // about:blank and surfaces a Policy error. Subresource and iframe
+        // loads are not covered by the allowlist check.
+        if !observes_only
             && let Ok(live) = page.eval_text("location.href").await
-            && let Err(e) = self.policy.check(&live)
+            && !live.is_empty()
         {
-            let _ = page.navigate("about:blank").await;
-            if let Some(s) = self.sessions.lock().await.get_mut(id) {
-                s.current_url = "about:blank".into();
+            if self.policy.restricted()
+                && let Err(e) = self.policy.check(&live)
+            {
+                let _ = page.navigate("about:blank").await;
+                if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                    s.current_url = "about:blank".into();
+                }
+                return Err(e);
             }
-            return Err(e);
+            if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                s.current_url = live;
+            }
         }
 
         if let ActionResult::Navigated { url, .. } = &result
@@ -1038,6 +1055,23 @@ impl SessionManager {
         };
         Ok(payload)
     }
+}
+
+/// Endpoint the browser launches on: the pool's first entry, else `proxy`.
+fn launch_proxy(options: &SessionOptions) -> Option<String> {
+    options
+        .proxies
+        .first()
+        .cloned()
+        .or_else(|| options.proxy.clone())
+}
+
+/// `launch_proxy` is `proxies[0]`, so that is the active index at open time.
+/// (Starting at `len-1` made the first rotation re-select the same proxy.)
+const INITIAL_PROXY_IDX: usize = 0;
+
+fn rotation_target(idx: usize, pool_len: usize) -> usize {
+    (idx + 1) % pool_len
 }
 
 fn default_profiles_root() -> Option<PathBuf> {
@@ -1129,6 +1163,20 @@ mod types_tests {
         assert!(p.check("https://intranet.example/x").is_ok());
         assert!(p.check("https://evil.example/x").is_err());
         assert!(Policy::default().check("https://anything").is_ok());
+    }
+
+    #[test]
+    fn first_rotation_moves_to_a_different_proxy() {
+        let opts = SessionOptions {
+            proxies: vec!["http://a:1".into(), "http://b:2".into()],
+            ..SessionOptions::default()
+        };
+        let pool = &opts.proxies;
+        let launched = launch_proxy(&opts).unwrap();
+        assert_eq!(launched, pool[INITIAL_PROXY_IDX]);
+        let next = rotation_target(INITIAL_PROXY_IDX, pool.len());
+        assert_ne!(pool[next], launched);
+        assert_eq!(rotation_target(next, pool.len()), INITIAL_PROXY_IDX);
     }
 
     #[test]
