@@ -16,6 +16,7 @@ pub mod uds;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -508,6 +509,33 @@ pub struct SessionManager {
     pool: PoolConfig,
     profiles_root: Option<PathBuf>,
     next_id: Mutex<u64>,
+    /// Opens that passed the cap check but have not yet inserted their
+    /// session (Chrome takes seconds to launch). Counted against the cap so
+    /// concurrent opens can't all slip under it.
+    opening: AtomicUsize,
+}
+
+/// Holds one slot of the session cap while a browser is launching.
+/// Released explicitly on success (under the sessions lock, so the slot moves
+/// atomically from "opening" to "open") or implicitly on any early return.
+struct Reservation<'a> {
+    counter: &'a AtomicUsize,
+    live: bool,
+}
+
+impl Reservation<'_> {
+    fn release(&mut self) {
+        if self.live {
+            self.live = false;
+            self.counter.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 impl Default for SessionManager {
@@ -528,6 +556,7 @@ impl SessionManager {
             pool: PoolConfig::default(),
             profiles_root: default_profiles_root(),
             next_id: Mutex::new(0),
+            opening: AtomicUsize::new(0),
         }
     }
 
@@ -601,12 +630,23 @@ impl SessionManager {
         &self,
         options: SessionOptions,
     ) -> Result<(SessionInfo, std::option::Option<Navigated>)> {
-        if self.sessions.lock().await.len() >= self.pool.max_sessions {
-            return Err(VakError::Policy(format!(
-                "session cap reached ({})",
-                self.pool.max_sessions
-            )));
+        if let Some(url) = &options.url {
+            self.policy.check(url)?;
         }
+        let mut reservation = {
+            let map = self.sessions.lock().await;
+            if map.len() + self.opening.load(Ordering::SeqCst) >= self.pool.max_sessions {
+                return Err(VakError::Policy(format!(
+                    "session cap reached ({})",
+                    self.pool.max_sessions
+                )));
+            }
+            self.opening.fetch_add(1, Ordering::SeqCst);
+            Reservation {
+                counter: &self.opening,
+                live: true,
+            }
+        };
         let mut launch = LaunchOptions {
             headless: options.headless,
             stealth: options
@@ -665,7 +705,11 @@ impl SessionManager {
             profile: options.profile.clone(),
             url: managed.current_url.clone(),
         };
-        self.sessions.lock().await.insert(info.id.clone(), managed);
+        {
+            let mut map = self.sessions.lock().await;
+            map.insert(info.id.clone(), managed);
+            reservation.release();
+        }
 
         tracing::info!(session = %info.id, "session opened");
         Ok((info, navigated))
@@ -711,12 +755,22 @@ impl SessionManager {
     /// stealth + headless), swap the page atomically, and drop the old browser
     /// so its chrome process is torn down. Requires a 2+ proxy pool at open.
     pub async fn rotate_proxy(&self, id: &SessionId) -> Result<ActionResult> {
-        let (opts, pool, idx) = {
+        // Lock discipline: the `sessions` map lock is only ever held briefly
+        // and never across another await. `act()` holds a page mutex while it
+        // briefly takes `sessions`; if this function held `sessions` while
+        // awaiting the page mutex the two would deadlock (and stall every
+        // session, since `sessions` is global).
+        let (opts, pool, idx, page_arc) = {
             let map = self.sessions.lock().await;
             let s = map
                 .get(id)
                 .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
-            (s.opts.clone(), s.proxy_pool.clone(), s.proxy_idx)
+            (
+                s.opts.clone(),
+                s.proxy_pool.clone(),
+                s.proxy_idx,
+                s.page.clone(),
+            )
         };
         let n = pool.len();
         if n < 2 {
@@ -729,20 +783,22 @@ impl SessionManager {
         launch.proxy_server = Some(pool[next].clone());
 
         tracing::info!(session = %id, proxy = %pool[next], "rotating proxy (endpoint {next}/{n})");
-        let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
+        let new_page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
 
-        // Remember where the session was, then swap the page live under the
-        // lock. The old CdpSession drops here and its chrome is torn down.
+        // Wait for any in-flight action on this session, then swap the page.
+        // The old CdpSession drops here and its chrome is torn down.
+        let mut guard = page_arc.lock().await;
+        *guard = new_page;
         let restored_url = {
             let mut map = self.sessions.lock().await;
-            let s = map
-                .get_mut(id)
-                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
-            let mut guard = s.page.lock().await;
-            *guard = page;
-            s.proxy_idx = next;
-            s.last_active = std::time::Instant::now();
-            s.current_url.clone()
+            match map.get_mut(id) {
+                Some(s) => {
+                    s.proxy_idx = next;
+                    s.last_active = std::time::Instant::now();
+                    s.current_url.clone()
+                }
+                None => return Err(VakError::NotFound(format!("unknown session {id}"))),
+            }
         };
 
         // Re-establish the session's URL on the freshly launched browser. This
@@ -752,13 +808,10 @@ impl SessionManager {
         // open(); we re-check cheaply to keep the invariant honoured.
         if restored_url != "about:blank" {
             self.policy.check(&restored_url)?;
-            let mut map = self.sessions.lock().await;
-            let s = map
-                .get_mut(id)
-                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
-            let mut guard = s.page.lock().await;
             let nav = guard.navigate(&restored_url).await?;
-            s.current_url = nav.url.clone();
+            if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                s.current_url = nav.url;
+            }
         }
 
         Ok(ActionResult::Flag { ok: true })

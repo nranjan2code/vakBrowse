@@ -172,7 +172,7 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **86 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **88 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
