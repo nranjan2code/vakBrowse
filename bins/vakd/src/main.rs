@@ -25,6 +25,9 @@ enum Commands {
         /// URL allow prefixes; repeatable. Empty = allow everything.
         #[arg(long = "allow")]
         allow_prefixes: Vec<String>,
+        /// Permit file: URLs and local-path file uploads (off by default).
+        #[arg(long)]
+        allow_file: bool,
         /// Hard cap on concurrent browser sessions.
         #[arg(long, default_value_t = 32)]
         max_sessions: usize,
@@ -52,6 +55,7 @@ async fn main() -> vakbrowse_core::Result<()> {
         Some(Commands::Serve {
             socket,
             allow_prefixes,
+            allow_file,
             max_sessions,
             idle_timeout_secs,
         }) => {
@@ -59,6 +63,7 @@ async fn main() -> vakbrowse_core::Result<()> {
                 &socket,
                 Policy {
                     url_allow_prefixes: allow_prefixes,
+                    allow_file: allow_file || Policy::from_env().allow_file,
                 },
                 vakbrowse_server::PoolConfig {
                     max_sessions,
@@ -90,9 +95,7 @@ async fn serve(
     // chrome) and remove the socket file before exiting. Previously Ctrl-C
     // killed the process abruptly, orphaning chrome processes.
     let serve_fut = vakbrowse_server::uds::serve(&path, manager.clone());
-    let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+    let shutdown = vakbrowse_server::shutdown_signal();
     tokio::select! {
         result = serve_fut => {
             // Server exited on its own (listener error). Clean up the socket.

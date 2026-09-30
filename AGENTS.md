@@ -75,7 +75,20 @@ MCP client config (Claude Code / Cursor / opencode):
 ```
 
 Optional env: `VAKBROWSE_ALLOW_PREFIXES=https://a.com,https://b.com` (URL
-allowlist for the MCP surface). `VAKBROWSE_HTTP_PORT` (default 7788) for
+allowlist, matched structurally — scheme+host+port+path segment, userinfo
+rejected — and re-checked against the live URL after every action, so link
+clicks/redirects to other origins park the tab on `about:blank` and return a
+Policy error; iframe/subresource loads are not covered). `file:` URLs and
+local-path file uploads are **off by default on every surface** (built via
+`Policy::from_env`); opt in with `VAKBROWSE_ALLOW_FILE=1` / `vakd serve
+--allow-file`. The library `Policy::default()` stays permissive for embedders
+and hermetic tests. REST security (`SecurityConfig`): `Host` must be loopback
+(or in `VAKBROWSE_ALLOWED_HOSTS`), a browser `Origin` must equal the request
+`Host` (or be in `VAKBROWSE_ALLOWED_ORIGINS`), and `VAKBROWSE_API_TOKEN` makes
+every route except `/health` require `Authorization: Bearer <token>`.
+`vakd-rest` refuses to bind a non-loopback address without a token unless
+`VAKBROWSE_INSECURE_NO_AUTH=1` (the Docker image binds 0.0.0.0, so pass a
+token). The playground needs token-less loopback use. `VAKBROWSE_HTTP_PORT` (default 7788) for
 `vakd-rest`. Both `vakd serve` (UDS) and `vakd-rest` (HTTP) now shut down
 gracefully on SIGINT/SIGTERM: all sessions are closed (dropping browser
 handles) and the UDS socket file is removed before exit.
@@ -115,7 +128,7 @@ print(s.batch(sid, [{"type":"navigate","url":"https://example.com"},
 s.close(sid)
 ```
 
-Docker: `docker build -t vakbrowse .` then `docker run -p 7788:7788 vakbrowse`
+Docker: `docker build -t vakbrowse .` then `docker run -e VAKBROWSE_API_TOKEN=… -p 127.0.0.1:7788:7788 vakbrowse`
 (engine binary is baked in at build time via `vakd doctor --no-probe`).
 
 ### Playground
@@ -159,7 +172,7 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **73 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **84 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by

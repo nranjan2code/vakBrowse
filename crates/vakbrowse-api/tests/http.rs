@@ -538,3 +538,66 @@ mod ws_util {
     }
 }
 use ws_util::{connect as tokio_tungstenite_connect, recv as recv_ws_text, send as send_ws_text};
+
+mod security {
+    use std::sync::Arc;
+    use vakbrowse_api::{SecurityConfig, build_router_with};
+    use vakbrowse_server::SessionManager;
+
+    async fn spawn(cfg: SecurityConfig) -> std::net::SocketAddr {
+        let app = build_router_with(Arc::new(SessionManager::default()), cfg);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    async fn status(req: reqwest::RequestBuilder) -> u16 {
+        req.send().await.unwrap().status().as_u16()
+    }
+
+    #[tokio::test]
+    async fn cross_origin_and_rebound_hosts_are_refused() {
+        let addr = spawn(SecurityConfig::default()).await;
+        let c = reqwest::Client::new();
+        let url = format!("http://{addr}/sessions");
+        assert_eq!(status(c.get(&url)).await, 200);
+        assert_eq!(
+            status(c.get(&url).header("Origin", "http://evil.example")).await,
+            403
+        );
+        assert_eq!(
+            status(c.get(&url).header("Origin", format!("http://{addr}"))).await,
+            200,
+            "same-origin (playground) must keep working"
+        );
+        assert_eq!(status(c.get(&url).header("Host", "attacker.example")).await, 403);
+    }
+
+    #[tokio::test]
+    async fn token_is_required_when_configured() {
+        let addr = spawn(SecurityConfig {
+            token: Some("s3cret".into()),
+            ..SecurityConfig::default()
+        })
+        .await;
+        let c = reqwest::Client::new();
+        let url = format!("http://{addr}/sessions");
+        assert_eq!(status(c.get(&url)).await, 401);
+        assert_eq!(status(c.get(&url).bearer_auth("wrong")).await, 401);
+        assert_eq!(status(c.get(&url).bearer_auth("s3cret")).await, 200);
+        assert_eq!(status(c.get(format!("http://{addr}/health"))).await, 200);
+    }
+
+    #[tokio::test]
+    async fn refuses_tokenless_public_bind() {
+        let err = vakbrowse_api::serve(
+            "0.0.0.0:0".parse().unwrap(),
+            vakbrowse_server::Policy::default(),
+            SecurityConfig::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("VAKBROWSE_API_TOKEN"), "{err}");
+    }
+}

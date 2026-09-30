@@ -27,7 +27,140 @@ struct ApiState {
     manager: Arc<SessionManager>,
 }
 
+/// Who may talk to this server. The API can run arbitrary JS in a real
+/// browser, so it must not be reachable by web pages the operator happens to
+/// visit (cross-site WebSocket hijack, DNS rebinding) or by the network at
+/// large.
+///
+/// * `Host` must be a loopback name (or listed in `allowed_hosts`) — defeats
+///   DNS rebinding. Skipped when a token is set, since a rebinding page cannot
+///   know the token.
+/// * A browser-supplied `Origin` must match the request's own `Host` or be
+///   listed in `allowed_origins` — defeats cross-site WebSocket hijacking.
+/// * With `token` set, every route except `/health` needs
+///   `Authorization: Bearer <token>`.
+#[derive(Clone, Debug, Default)]
+pub struct SecurityConfig {
+    pub token: Option<String>,
+    pub allowed_hosts: Vec<String>,
+    pub allowed_origins: Vec<String>,
+    /// Permit binding a non-loopback address without a token.
+    pub allow_insecure_bind: bool,
+}
+
+fn split_env(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+impl SecurityConfig {
+    /// `VAKBROWSE_API_TOKEN`, `VAKBROWSE_ALLOWED_HOSTS`,
+    /// `VAKBROWSE_ALLOWED_ORIGINS` (comma-separated), and
+    /// `VAKBROWSE_INSECURE_NO_AUTH=1` to allow a tokenless non-loopback bind.
+    pub fn from_env() -> Self {
+        Self {
+            token: std::env::var("VAKBROWSE_API_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty()),
+            allowed_hosts: split_env("VAKBROWSE_ALLOWED_HOSTS"),
+            allowed_origins: split_env("VAKBROWSE_ALLOWED_ORIGINS"),
+            allow_insecure_bind: matches!(
+                std::env::var("VAKBROWSE_INSECURE_NO_AUTH").as_deref(),
+                Ok("1") | Ok("true")
+            ),
+        }
+    }
+
+    fn host_allowed(&self, host_header: &str) -> bool {
+        let name = hostname(host_header);
+        matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
+            || self
+                .allowed_hosts
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(&name) || h.eq_ignore_ascii_case(host_header))
+    }
+
+    fn origin_allowed(&self, origin: &str, host_header: Option<&str>) -> bool {
+        if self.allowed_origins.iter().any(|o| o == origin) {
+            return true;
+        }
+        let authority = origin.split_once("://").map(|(_, a)| a).unwrap_or("");
+        host_header.is_some_and(|h| h.eq_ignore_ascii_case(authority))
+    }
+}
+
+/// Host header without its port; bracketed IPv6 keeps its brackets.
+fn hostname(host_header: &str) -> String {
+    let h = host_header.trim().to_ascii_lowercase();
+    if h.starts_with('[') {
+        return match h.find(']') {
+            Some(i) => h[..=i].to_string(),
+            None => h,
+        };
+    }
+    h.split(':').next().unwrap_or("").to_string()
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn screen(
+    sec: &SecurityConfig,
+    headers: &axum::http::HeaderMap,
+    path: &str,
+) -> Option<axum::response::Response> {
+    use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
+    let get = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    let host = get(HOST);
+
+    if sec.token.is_none()
+        && let Some(h) = host
+        && !sec.host_allowed(h)
+    {
+        return Some((StatusCode::FORBIDDEN, "host not allowed").into_response());
+    }
+    if let Some(o) = get(ORIGIN)
+        && !sec.origin_allowed(o, host)
+    {
+        return Some((StatusCode::FORBIDDEN, "origin not allowed").into_response());
+    }
+    if let Some(token) = &sec.token
+        && path != "/health"
+    {
+        let ok = get(AUTHORIZATION)
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|t| ct_eq(t.as_bytes(), token.as_bytes()));
+        if !ok {
+            return Some(
+                (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response(),
+            );
+        }
+    }
+    None
+}
+
+async fn guard(
+    State(sec): State<Arc<SecurityConfig>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(denied) = screen(&sec, req.headers(), req.uri().path()) {
+        return denied;
+    }
+    next.run(req).await
+}
+
+/// Router with the default (loopback-only, no token) security config.
 pub fn build_router(manager: Arc<SessionManager>) -> Router {
+    build_router_with(manager, SecurityConfig::default())
+}
+
+pub fn build_router_with(manager: Arc<SessionManager>, security: SecurityConfig) -> Router {
     let state = ApiState { manager };
 
     #[allow(unused_mut)]
@@ -52,7 +185,11 @@ pub fn build_router(manager: Arc<SessionManager>) -> Router {
             .fallback(get(playground_fallback));
     }
 
-    app.with_state(state)
+    app.layer(axum::middleware::from_fn_with_state(
+        Arc::new(security),
+        guard,
+    ))
+    .with_state(state)
 }
 
 /// Directory where the prebuilt frontend lives. Override with
@@ -71,16 +208,24 @@ fn playground_dir() -> std::path::PathBuf {
 pub async fn serve(
     addr: SocketAddr,
     policy: Policy,
+    security: SecurityConfig,
 ) -> vakbrowse_core::Result<()> {
+    if !addr.ip().is_loopback() && security.token.is_none() && !security.allow_insecure_bind {
+        return Err(vakbrowse_core::VakError::Policy(format!(
+            "refusing to bind {addr}: this API can run arbitrary JS in a browser. \
+             Set VAKBROWSE_API_TOKEN (clients send `Authorization: Bearer <token>`), \
+             or VAKBROWSE_INSECURE_NO_AUTH=1 if the network is already trusted."
+        )));
+    }
     let manager = Arc::new(SessionManager::with_policy(policy));
-    let app = build_router(manager.clone());
+    let app = build_router_with(manager.clone(), security);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| vakbrowse_core::VakError::Engine(format!("bind {addr}: {e}")))?;
     tracing::info!("vakd-rest listening on http://{addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            vakbrowse_server::shutdown_signal().await;
             tracing::info!(
                 "shutdown signal received; closing {} session(s)",
                 manager.stats().await.0

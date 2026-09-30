@@ -15,14 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let policy = Policy {
-        url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
-            .unwrap_or_default()
-            .split(',')
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string)
-            .collect(),
-    };
+    let policy = Policy::from_env();
 
     // Wrap the client's stdin in a framing normalizer so vak-mcp accepts BOTH
     // Content-Length-block and newline-delimited-JSON (NDJSON) input framing.
@@ -32,7 +25,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (stdin, stdout) = rmcp::transport::stdio();
     let framed_stdin = normalize_stdin(stdin);
 
-    let service = VakMcp::new(policy).serve((framed_stdin, stdout)).await?;
-    service.waiting().await?;
+    let server = VakMcp::new(policy);
+    let manager = server.manager();
+    let service = server.serve((framed_stdin, stdout)).await?;
+    // Stop on client disconnect OR on SIGINT/SIGTERM; either way close every
+    // session so Chrome is not left running.
+    tokio::select! {
+        result = service.waiting() => { result?; }
+        _ = vakbrowse_server::shutdown_signal() => {}
+    }
+    manager.close_all().await;
     Ok(())
 }

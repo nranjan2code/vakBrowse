@@ -62,7 +62,7 @@ capability once, all five surfaces get it.
 - **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
   CDP screenshots, batch studio, console REPL, cookie manager, and tour guide.
 
-73 tests, clippy clean. Hardened against real environments: launch args verified
+84 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):
@@ -170,7 +170,9 @@ curl -X POST localhost:7788/sessions -d '{"url":"https://example.com"}' \
 import ctypes; ctypes.CDLL("target/release/libvakbrowse_ffi.dylib")
 
 # or container
-docker build -t vakbrowse . && docker run -p 7788:7788 vakbrowse
+docker build -t vakbrowse . && \
+  docker run -e VAKBROWSE_API_TOKEN=change-me -p 127.0.0.1:7788:7788 vakbrowse
+# clients then send `Authorization: Bearer change-me`
 ```
 
 ## License

@@ -16,9 +16,9 @@ tracing = { workspace = true }
 dirs = "6"
 futures.workspace = true
 base64 = "0.23.1"
+url.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
 tempfile = "3"
-url.workspace = true
 vakbrowse-engine = { workspace = true }

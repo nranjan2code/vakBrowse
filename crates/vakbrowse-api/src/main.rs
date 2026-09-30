@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use vakbrowse_api::serve;
+use vakbrowse_api::{SecurityConfig, serve};
 use vakbrowse_server::Policy;
 
 #[tokio::main]
@@ -19,14 +19,7 @@ async fn main() -> vakbrowse_core::Result<()> {
     let addr: SocketAddr = format!("{bind_host}:{port}")
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
-    let policy = Policy {
-        url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
-            .unwrap_or_default()
-            .split(',')
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string)
-            .collect(),
-    };
+    let policy = Policy::from_env();
 
-    serve(addr, policy).await
+    serve(addr, policy, SecurityConfig::from_env()).await
 }

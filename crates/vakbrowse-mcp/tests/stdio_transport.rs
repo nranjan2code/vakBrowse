@@ -217,6 +217,7 @@ fn spawn_vak_mcp() -> tokio::process::Child {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::from(stderr_file))
         .env("RUST_LOG", "rmcp=debug")
+        .env("VAKBROWSE_ALLOW_FILE", "1")
         .spawn()
         .unwrap_or_else(|e| panic!("failed to spawn {bin}: {e}"))
 }

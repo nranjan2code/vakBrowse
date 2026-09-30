@@ -34,14 +34,7 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 fn manager() -> &'static SessionManager {
     static MANAGER: OnceLock<SessionManager> = OnceLock::new();
     MANAGER.get_or_init(|| {
-        SessionManager::with_policy(Policy {
-            url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
-                .unwrap_or_default()
-                .split(',')
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .collect(),
-        })
+        SessionManager::with_policy(Policy::from_env())
     })
 }
 

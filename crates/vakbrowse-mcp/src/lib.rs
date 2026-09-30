@@ -478,6 +478,11 @@ impl VakMcp {
         }
     }
 
+    /// Shared handle to the session manager (for graceful shutdown).
+    pub fn manager(&self) -> Arc<SessionManager> {
+        Arc::clone(&self.manager)
+    }
+
     /// Transport-free tool dispatch; `call_tool` delegates here.
     pub async fn tool_call(
         &self,

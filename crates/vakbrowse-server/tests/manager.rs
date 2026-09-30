@@ -188,6 +188,7 @@ async fn policy_blocks_navigation() {
     let _g = browser_lock().acquire().await.unwrap();
     let manager = SessionManager::with_policy(Policy {
         url_allow_prefixes: vec!["https://allowed.example/".into()],
+        ..Policy::default()
     });
     let resp = manager
         .handle(Request::Open {
@@ -396,4 +397,108 @@ async fn rotate_proxy_without_pool_is_error() {
         .await
         .unwrap_err();
     assert!(resp.to_string().contains("proxy pool"), "{resp}");
+}
+
+/// Serve one fixed HTML body on an ephemeral loopback port; returns the port.
+async fn serve_html(body: String) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn file_urls_can_be_disabled() {
+    let manager = SessionManager::with_policy(Policy {
+        allow_file: false,
+        ..Policy::default()
+    });
+    let resp = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(fixture_url("form.html")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(resp, ResponsePayload::Error(ServiceError::Policy(_))),
+        "file: must be refused, got {resp:?}"
+    );
+}
+
+#[tokio::test]
+async fn click_through_to_disallowed_origin_is_caught() {
+    let _g = browser_lock().acquire().await.unwrap();
+    let other = serve_html("<p>elsewhere</p>".into()).await;
+    let home = serve_html(format!(
+        "<a href=\"http://127.0.0.1:{other}/\">out</a>"
+    ))
+    .await;
+    let manager = SessionManager::with_policy(Policy {
+        url_allow_prefixes: vec![format!("http://127.0.0.1:{home}")],
+        ..Policy::default()
+    });
+    let resp = manager
+        .handle(Request::Open {
+            options: SessionOptions {
+                url: Some(format!("http://127.0.0.1:{home}/")),
+                ..SessionOptions::default()
+            },
+        })
+        .await
+        .unwrap();
+    let ResponsePayload::Opened(info) = resp else {
+        panic!("open failed: {resp:?}")
+    };
+    let session = info.id;
+    manager
+        .handle(Request::Act {
+            session: session.clone(),
+            action: Action::Snapshot,
+        })
+        .await
+        .unwrap();
+    let resp = manager
+        .handle(Request::Act {
+            session: session.clone(),
+            action: Action::Click { r#ref: "@e1".into() },
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(resp, ResponsePayload::Error(ServiceError::Policy(_))),
+        "click to a foreign origin must be a policy error, got {resp:?}"
+    );
+    let resp = manager
+        .handle(Request::Act {
+            session: session.clone(),
+            action: Action::EvalText {
+                expression: "location.href".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(&resp, ResponsePayload::Result(ActionResult::Text { text }) if text == "about:blank"),
+        "tab must be parked on about:blank, got {resp:?}"
+    );
+    manager.handle(Request::Close { session }).await.unwrap();
 }

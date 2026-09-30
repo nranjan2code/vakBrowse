@@ -332,27 +332,130 @@ pub type Response = std::result::Result<ResponsePayload, String>;
 /// Static policy applied to every navigation. Empty prefix list = allow all.
 /// This is the architectural defense against page-driven prompt injection:
 /// scope what an agent's browser may reach, independent of prompts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// Entries are matched structurally (scheme + host + port + path segment),
+/// never as raw string prefixes, so `https://a.com` does not admit
+/// `https://a.com.evil.io` or `https://a.com@evil.io`. Entries that are not
+/// hierarchical URLs (e.g. `data:text/html`) fall back to a string prefix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
     #[serde(default)]
     pub url_allow_prefixes: Vec<String>,
+    /// Whether `file:` URLs may be opened (and local paths handed to file
+    /// inputs). The library default is permissive so embedders and hermetic
+    /// fixtures work; the daemon/REST/MCP/FFI surfaces build their policy with
+    /// [`Policy::from_env`], which turns this OFF unless explicitly enabled.
+    #[serde(default = "default_true")]
+    pub allow_file: bool,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            url_allow_prefixes: Vec::new(),
+            allow_file: true,
+        }
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    )
 }
 
 impl Policy {
-    fn allows(&self, url: &str) -> bool {
-        if self.url_allow_prefixes.is_empty() {
+    /// Policy for network-facing surfaces: `VAKBROWSE_ALLOW_PREFIXES`
+    /// (comma-separated) and `VAKBROWSE_ALLOW_FILE=1` to opt back in to `file:`.
+    pub fn from_env() -> Self {
+        Self {
+            url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+            allow_file: env_flag("VAKBROWSE_ALLOW_FILE"),
+        }
+    }
+
+    fn restricted(&self) -> bool {
+        !self.url_allow_prefixes.is_empty()
+    }
+
+    fn allows(&self, raw: &str) -> bool {
+        let parsed = url::Url::parse(raw).ok();
+        if let Some(u) = &parsed {
+            if u.scheme() == "file" && !self.allow_file {
+                return false;
+            }
+            // about:blank is the neutral parking page and carries no content.
+            if u.scheme() == "about" && u.path() == "blank" {
+                return true;
+            }
+        }
+        if !self.restricted() {
             return true;
         }
-        self.url_allow_prefixes.iter().any(|p| url.starts_with(p))
+        let Some(u) = parsed else {
+            return false;
+        };
+        if !u.username().is_empty() || u.password().is_some() {
+            return false;
+        }
+        self.url_allow_prefixes
+            .iter()
+            .any(|p| prefix_matches(p, &u, raw))
     }
 
     fn check(&self, url: &str) -> Result<()> {
         if self.allows(url) {
             Ok(())
+        } else if url.starts_with("file:") && !self.allow_file {
+            Err(VakError::Policy(
+                "file: URLs are disabled (set VAKBROWSE_ALLOW_FILE=1 to enable)".into(),
+            ))
         } else {
             Err(VakError::Policy(format!("url blocked by allowlist: {url}")))
         }
     }
+}
+
+fn prefix_matches(prefix: &str, url: &url::Url, raw: &str) -> bool {
+    match url::Url::parse(prefix) {
+        Ok(p) if !p.cannot_be_a_base() => {
+            if p.scheme() != url.scheme()
+                || p.host_str() != url.host_str()
+                || p.port_or_known_default() != url.port_or_known_default()
+            {
+                return false;
+            }
+            let base = p.path().trim_end_matches('/');
+            base.is_empty()
+                || url.path() == base
+                || url.path().starts_with(&format!("{base}/"))
+        }
+        _ => raw.starts_with(prefix),
+    }
+}
+
+/// Resolves when the process is asked to stop: SIGINT (Ctrl-C) or, on unix,
+/// SIGTERM (what `docker stop`, systemd and process supervisors send).
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 struct ManagedSession {
@@ -695,6 +798,11 @@ impl SessionManager {
             Action::Navigate { url } | Action::NewTab { url: Some(url) } => {
                 self.policy.check(url)?;
             }
+            Action::SetFileChooser { .. } if !self.policy.allow_file => {
+                return Err(VakError::Policy(
+                    "local file access is disabled (set VAKBROWSE_ALLOW_FILE=1 to enable)".into(),
+                ));
+            }
             _ => {}
         }
 
@@ -860,6 +968,21 @@ impl SessionManager {
             }
         };
 
+        // Page-driven navigation (link clicks, redirects, history, JS) never
+        // passes through `navigate`, so re-check where the page actually is.
+        // A violation parks the tab on about:blank and surfaces a Policy error.
+        // Subresource and iframe loads are not covered by this check.
+        if self.policy.restricted()
+            && let Ok(live) = page.eval_text("location.href").await
+            && let Err(e) = self.policy.check(&live)
+        {
+            let _ = page.navigate("about:blank").await;
+            if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                s.current_url = "about:blank".into();
+            }
+            return Err(e);
+        }
+
         if let ActionResult::Navigated { url, .. } = &result
             && let Some(s) = self.sessions.lock().await.get_mut(id)
         {
@@ -1001,9 +1124,47 @@ mod types_tests {
     fn policy_gate() {
         let p = Policy {
             url_allow_prefixes: vec!["https://intranet.example/".into()],
+            ..Policy::default()
         };
         assert!(p.check("https://intranet.example/x").is_ok());
         assert!(p.check("https://evil.example/x").is_err());
         assert!(Policy::default().check("https://anything").is_ok());
+    }
+
+    #[test]
+    fn policy_is_structural_not_string_prefix() {
+        let p = Policy {
+            url_allow_prefixes: vec!["https://a.com".into(), "https://b.com/app".into()],
+            ..Policy::default()
+        };
+        assert!(p.check("https://a.com/x?y=1").is_ok());
+        assert!(p.check("https://a.com:443/x").is_ok());
+        assert!(p.check("https://a.com.evil.io/").is_err());
+        assert!(p.check("https://a.com@evil.io/").is_err());
+        assert!(p.check("https://user:pw@a.com/").is_err());
+        assert!(p.check("http://a.com/").is_err());
+        assert!(p.check("https://a.com:8443/").is_err());
+        assert!(p.check("https://b.com/app").is_ok());
+        assert!(p.check("https://b.com/app/x").is_ok());
+        assert!(p.check("https://b.com/application").is_err());
+        assert!(p.check("about:blank").is_ok());
+        assert!(p.check("not a url").is_err());
+    }
+
+    #[test]
+    fn opaque_prefixes_and_file_gate() {
+        let p = Policy {
+            url_allow_prefixes: vec!["data:text/html".into()],
+            ..Policy::default()
+        };
+        assert!(p.check("data:text/html,<p>x</p>").is_ok());
+        assert!(p.check("data:text/plain,x").is_err());
+
+        let no_file = Policy {
+            allow_file: false,
+            ..Policy::default()
+        };
+        assert!(no_file.check("file:///etc/hosts").is_err());
+        assert!(no_file.check("https://example.com").is_ok());
     }
 }
