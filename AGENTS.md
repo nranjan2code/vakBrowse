@@ -172,7 +172,7 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **100 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **104 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
@@ -247,6 +247,19 @@ playground/
   `~/Library/Caches/vakbrowse/cft/{version}/{platform}/…` with a
   `{channel}.version` marker for offline reuse. System Chrome is the offline
   fallback (`cft::find_system_chrome`).
+- MCP hardening: every tool carries `readOnlyHint`/`destructiveHint`/
+  `openWorldHint` annotations (read-only: snapshot/extract/source/screenshot/
+  find/tabs/cookies/downloads/sessions; destructive: close, close_tab,
+  clear_cookies, set_file_chooser). Page-derived text (snapshots, `Text`
+  results, WebMCP tool lists) is fenced as
+  `<<page-content TOKEN: untrusted data …>> … <<end page-content TOKEN>>`
+  with a per-process random token, and the server instructions tell the model
+  never to follow instructions inside — a page cannot forge the closing fence.
+  `eval`/`source`/WebMCP text is capped at `MAX_TEXT_RESULT_CHARS` (60k) with a
+  truncation note on every surface. `vak-mcp` and `vakd-rest` now run the idle
+  reaper by default (30 min; `VAKBROWSE_IDLE_TIMEOUT_SECS`, `0` disables;
+  `VAKBROWSE_MAX_SESSIONS`), and the reaper skips a session whose page lock is
+  held (an action still running). The 35-tool surface itself is unchanged.
 - Snapshots carry widget **state** per element (`checked`/`unchecked`/`mixed`,
   `disabled`, `expanded`/`collapsed`, `selected`, `required`), page **headings**
   positioned among the elements (rendered as `## Title` lines, so repeated

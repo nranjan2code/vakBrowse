@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = VakMcp::new(policy);
     let manager = server.manager();
+    manager.spawn_reaper();
     let service = server.serve((framed_stdin, stdout)).await?;
     // Stop on client disconnect OR on SIGINT/SIGTERM; either way close every
     // session so Chrome is not left running.

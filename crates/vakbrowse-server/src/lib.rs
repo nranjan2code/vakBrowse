@@ -9,6 +9,29 @@
 /// bounding memory for the `Vec::with_capacity` allocation.
 pub const MAX_BATCH_SIZE: usize = 500;
 
+/// Cap on free-form text a single action may return (`eval`, `source`,
+/// WebMCP results). ~15k tokens: enough to read a page, not enough for one
+/// runaway `document.documentElement.outerHTML` to flood an agent's context.
+pub const MAX_TEXT_RESULT_CHARS: usize = 60_000;
+
+fn cap_text(mut text: String) -> String {
+    let total = text.chars().count();
+    if total <= MAX_TEXT_RESULT_CHARS {
+        return text;
+    }
+    let cut = text
+        .char_indices()
+        .nth(MAX_TEXT_RESULT_CHARS)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    text.truncate(cut);
+    text.push_str(&format!(
+        "\n[truncated: {} more characters; use extract, or narrow the expression]",
+        total - MAX_TEXT_RESULT_CHARS
+    ));
+    text
+}
+
 pub mod render;
 #[cfg(unix)]
 pub mod uds;
@@ -498,6 +521,29 @@ fn default_max_sessions() -> usize {
     32
 }
 
+impl PoolConfig {
+    /// `VAKBROWSE_MAX_SESSIONS` and `VAKBROWSE_IDLE_TIMEOUT_SECS` (`0` turns
+    /// idle reaping off). `default_idle` applies when the latter is unset.
+    pub fn from_env(default_idle: Option<u64>) -> Self {
+        let max_sessions = std::env::var("VAKBROWSE_MAX_SESSIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(default_max_sessions);
+        let idle_timeout_secs = match std::env::var("VAKBROWSE_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            Some(0) => None,
+            Some(n) => Some(n),
+            None => default_idle,
+        };
+        Self {
+            max_sessions,
+            idle_timeout_secs,
+        }
+    }
+}
+
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
@@ -595,6 +641,9 @@ impl SessionManager {
                     map.values()
                         .filter(|s| {
                             s.last_active.elapsed() > std::time::Duration::from_secs(timeout)
+                                // A locked page means an action is still running
+                                // (last_active is only stamped when it starts).
+                                && s.page.try_lock().is_ok()
                         })
                         .map(|s| s.id.clone())
                         .collect()
@@ -921,7 +970,7 @@ impl SessionManager {
                 ActionResult::Done
             }
             Action::EvalText { expression } => ActionResult::Text {
-                text: page.eval_text(&expression).await?,
+                text: cap_text(page.eval_text(&expression).await?),
             },
             Action::FindByCss { selector } => ActionResult::Elements {
                 refs: page.find_by_css(&selector).await?,
@@ -973,7 +1022,7 @@ impl SessionManager {
                 name,
                 arguments_json,
             } => ActionResult::Text {
-                text: page.webmcp_invoke(&name, &arguments_json).await?,
+                text: cap_text(page.webmcp_invoke(&name, &arguments_json).await?),
             },
 
             Action::Tabs => ActionResult::Tabs {
@@ -1028,7 +1077,7 @@ impl SessionManager {
                 ActionResult::Flag { ok }
             }
             Action::Source => {
-                let text = page.source().await?;
+                let text = cap_text(page.source().await?);
                 ActionResult::Text { text }
             }
             Action::Downloads => {
@@ -1227,6 +1276,17 @@ mod types_tests {
         assert!(p.check("https://intranet.example/x").is_ok());
         assert!(p.check("https://evil.example/x").is_err());
         assert!(Policy::default().check("https://anything").is_ok());
+    }
+
+    #[test]
+    fn long_text_results_are_capped() {
+        let short = "x".repeat(MAX_TEXT_RESULT_CHARS);
+        assert_eq!(cap_text(short.clone()), short);
+        let long = "é".repeat(MAX_TEXT_RESULT_CHARS + 7);
+        let out = cap_text(long);
+        assert!(out.starts_with(&"é".repeat(MAX_TEXT_RESULT_CHARS)));
+        assert!(out.ends_with("narrow the expression]"));
+        assert!(out.contains("7 more characters"));
     }
 
     #[test]

@@ -62,7 +62,7 @@ capability once, all five surfaces get it.
 - **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
   CDP screenshots, batch studio, console REPL, cookie manager, and tour guide.
 
-100 tests, clippy clean. Hardened against real environments: launch args verified
+104 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):

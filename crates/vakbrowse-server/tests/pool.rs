@@ -70,6 +70,40 @@ async fn reaper_closes_idle_sessions() {
     panic!("idle session was not reaped");
 }
 
+/// `last_active` is stamped when an action *starts*; an action outliving the
+/// idle timeout must not have its session reaped out from under it.
+#[tokio::test]
+async fn reaper_spares_sessions_with_a_running_action() {
+    use vakbrowse_server::{Action, SessionOptions};
+    let manager = std::sync::Arc::new(SessionManager::default().with_pool(PoolConfig {
+        max_sessions: 4,
+        idle_timeout_secs: Some(1),
+    }));
+    manager.spawn_reaper();
+    let ResponsePayload::Opened(info) = manager
+        .handle(Request::Open {
+            options: SessionOptions::default(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("open failed")
+    };
+    // Truthy only after ~7s: spans at least one 5s reaper tick past the 1s
+    // idle timeout.
+    let waited = manager
+        .act(
+            &info.id,
+            Action::WaitForTruthy {
+                expression: "(window.__t ??= Date.now(), Date.now() - window.__t > 7000)".into(),
+                timeout_ms: 20_000,
+            },
+        )
+        .await;
+    waited.expect("wait must finish; session must not be reaped mid-action");
+    assert_eq!(manager.list().await.len(), 1);
+}
+
 /// The cap check used to run before a multi-second Chrome launch and the
 /// insert after it, so N concurrent opens all passed the check.
 #[tokio::test]

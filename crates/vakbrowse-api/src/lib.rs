@@ -217,7 +217,14 @@ pub async fn serve(
              or VAKBROWSE_INSECURE_NO_AUTH=1 if the network is already trusted."
         )));
     }
-    let manager = Arc::new(SessionManager::with_policy(policy));
+    // Unlike the daemon (explicit --idle-timeout-secs), an HTTP service left
+    // running would otherwise accumulate forgotten Chrome sessions forever.
+    let manager = Arc::new(
+        SessionManager::with_policy(policy).with_pool(vakbrowse_server::PoolConfig::from_env(
+            Some(1800),
+        )),
+    );
+    manager.spawn_reaper();
     let app = build_router_with(manager.clone(), security);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
