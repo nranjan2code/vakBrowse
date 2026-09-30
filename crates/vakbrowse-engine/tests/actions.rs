@@ -180,7 +180,8 @@ async fn click_reports_navigation_outcome() {
             noop,
             ClickResult {
                 navigated: false,
-                url: None
+                url: None,
+                ..
             }
         ),
         "got {noop:?}"
@@ -310,6 +311,7 @@ async fn cookies_set_get_roundtrip() {
             secure: false,
             http_only: false,
             same_site: Some("Strict".into()),
+            expires: None,
         })
         .await
         .unwrap();

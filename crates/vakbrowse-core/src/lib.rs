@@ -79,6 +79,27 @@ pub struct Snapshot {
     pub title: String,
     /// Interactive elements in reading order.
     pub elements: Vec<SnapshotNode>,
+    /// Page headings, positioned among the elements, so repeated controls
+    /// ("Read more" ×20) can be told apart by the section they sit under.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headings: Vec<Heading>,
+    /// Interactive elements dropped because the page exceeded the snapshot
+    /// size cap. They have no refs; narrow with `find_by_css` or scroll.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// A heading seen in the accessibility tree (context only — not actionable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Heading {
+    /// Number of snapshot elements that precede this heading.
+    pub before: usize,
+    pub level: u8,
+    pub text: String,
 }
 
 /// A completed download in the session's download directory.
@@ -99,6 +120,10 @@ pub struct SnapshotNode {
     pub value: Option<String>,
     #[serde(default)]
     pub clickable: bool,
+    /// Widget state: `checked` | `unchecked` | `mixed`, `disabled`,
+    /// `expanded` | `collapsed`, `selected`, `required`. Empty when none apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub state: Vec<String>,
 }
 
 /// A cookie as seen by agents (read shape).
@@ -118,6 +143,9 @@ pub struct Cookie {
     /// "Strict" | "Lax" | "None" — None means "unspecified".
     #[serde(default)]
     pub same_site: Option<String>,
+    /// Expiry as seconds since the Unix epoch; None for session cookies.
+    #[serde(default)]
+    pub expires: Option<f64>,
 }
 
 /// A cookie an agent may set (write shape).
@@ -138,6 +166,10 @@ pub struct CookieInput {
     /// modes, so agents must be explicit when they need cross-site.
     #[serde(default)]
     pub same_site: Option<String>,
+    /// Expiry as seconds since the Unix epoch. Omit for a session cookie
+    /// (which will not survive a restart of a persistent profile).
+    #[serde(default)]
+    pub expires: Option<f64>,
 }
 
 fn default_path() -> String {

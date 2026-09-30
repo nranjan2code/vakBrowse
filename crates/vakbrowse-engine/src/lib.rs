@@ -122,7 +122,9 @@ pub trait PageOps: Send {
     async fn webmcp_invoke(&self, name: &str, arguments_json: &str) -> Result<String>;
 
     /// Tabs of this session, active tab first.
-    async fn tabs(&self) -> Result<Vec<TabInfo>>;
+    /// Lists tabs, first adopting any the page opened itself (`target=_blank`,
+    /// `window.open`) and dropping ones it closed.
+    async fn tabs(&mut self) -> Result<Vec<TabInfo>>;
     /// Open a new tab, optionally navigating immediately; it becomes active.
     async fn new_tab(&mut self, url: Option<&str>) -> Result<TabInfo>;
     /// Make an existing tab active. Snapshot refs belong to tabs.
@@ -167,18 +169,24 @@ pub struct ClickResult {
     /// The post-click URL when `navigated` is true (the navigated-to page);
     /// `None` otherwise.
     pub url: Option<String>,
+    /// Id of a tab the click caused the page to open (`target=_blank`,
+    /// `window.open`). It is registered but NOT made active: `switch_tab` to
+    /// follow it.
+    pub opened_tab: Option<String>,
 }
 impl ClickResult {
     pub fn navigated(url: String) -> Self {
         Self {
             navigated: true,
             url: Some(url),
+            opened_tab: None,
         }
     }
     pub fn stayed() -> Self {
         Self {
             navigated: false,
             url: None,
+            opened_tab: None,
         }
     }
 }

@@ -154,7 +154,7 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         ),
         Tool::new(
             "browser_select",
-            "Select an <option> value on a dropdown by ref.",
+            "Select an <option> on a dropdown by ref, by its value or visible label.",
             schema(
                 vec![
                     ("session", json!({"type": "string", "description": SESSION})),
@@ -166,7 +166,7 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
         ),
         Tool::new(
             "browser_press_key",
-            "Press Enter/Tab/Escape/arrows or a single character.",
+            "Press a key: Enter/Tab/Escape/Backspace/Delete/arrows/Home/End/PageUp/PageDown or a single character, optionally with modifiers, e.g. \"Control+a\", \"Shift+Tab\", \"Meta+Enter\".",
             schema(
                 vec![
                     ("session", json!({"type": "string", "description": SESSION})),
@@ -430,6 +430,7 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
                     ("secure", json!({"type": "boolean", "description": "secure flag"})),
                     ("http_only", json!({"type": "boolean", "description": "httpOnly flag"})),
                     ("same_site", json!({"type": "string", "description": "Strict, Lax, or None"})),
+                    ("expires", json!({"type": "number", "description": "expiry, seconds since Unix epoch; omit for a session cookie"})),
                 ],
                 &["session", "name", "value", "domain"],
             ),
@@ -756,6 +757,7 @@ impl VakMcp {
                 let secure = arg(args, "secure").and_then(|v| v.as_bool()).unwrap_or(false);
                 let http_only = arg(args, "http_only").and_then(|v| v.as_bool()).unwrap_or(false);
                 let same_site = arg(args, "same_site").and_then(|v| v.as_str()).map(String::from);
+                let expires = arg(args, "expires").and_then(|v| v.as_f64());
                 Request::Act {
                     session: SessionId(arg_str(args, "session")?),
                     action: Action::SetCookie {
@@ -767,6 +769,7 @@ impl VakMcp {
                             secure,
                             http_only,
                             same_site,
+                            expires,
                         },
                     },
                 }
@@ -863,9 +866,19 @@ fn fmt_action(a: &vakbrowse_server::ActionResult) -> String {
             serde_json::to_string_pretty(cookies).unwrap_or_else(|_| "[]".into())
         }
         vakbrowse_server::ActionResult::Done => "done".into(),
-        vakbrowse_server::ActionResult::Clicked { navigated, url } => {
+        vakbrowse_server::ActionResult::Clicked {
+            navigated,
+            url,
+            opened_tab,
+        } => {
+            let opened = opened_tab
+                .as_ref()
+                .map(|t| format!(" (opened new tab {t}; browser_switch_tab to follow it)"))
+                .unwrap_or_default();
             if *navigated {
-                format!("navigated to {}", url.as_deref().unwrap_or(""))
+                format!("navigated to {}{opened}", url.as_deref().unwrap_or(""))
+            } else if !opened.is_empty() {
+                format!("no navigation in this tab{opened}")
             } else {
                 "no navigation (JS-handler click, non-navigating link, or bot wall; reopen with click_recovery=true to force it — this re-fires page handlers)".to_string()
             }

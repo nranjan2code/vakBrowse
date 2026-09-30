@@ -222,6 +222,9 @@ pub enum ActionResult {
     Clicked {
         navigated: bool,
         url: Option<String>,
+        /// Tab the click made the page open; not active until `switch_tab`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        opened_tab: Option<TabId>,
     },
     /// `find_by_css` result: stable `@eN` refs matching the selector, numbered
     /// to match `snapshot`'s ordering (immediately clickable).
@@ -899,6 +902,7 @@ impl SessionManager {
                 ActionResult::Clicked {
                     navigated: out.navigated,
                     url: out.url,
+                    opened_tab: out.opened_tab.map(TabId),
                 }
             }
             Action::Fill { r#ref, text } => {

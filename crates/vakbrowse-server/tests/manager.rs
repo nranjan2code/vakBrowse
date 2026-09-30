@@ -156,6 +156,7 @@ async fn click_signals_navigation() {
         ActionResult::Clicked {
             navigated: false,
             url: None,
+            ..
         } => {}
         other => panic!("expected not-navigated Clicked, got {other:?}"),
     }
@@ -174,6 +175,7 @@ async fn click_signals_navigation() {
         ActionResult::Clicked {
             navigated: true,
             url,
+            ..
         } => {
             assert!(url.unwrap().ends_with("form.html"));
         }

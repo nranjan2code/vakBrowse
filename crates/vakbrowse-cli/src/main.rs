@@ -395,9 +395,19 @@ fn format_action_result(action: vakbrowse_server::ActionResult) -> String {
             format!("tab {} open ({})", tab.id, tab.url)
         }
         vakbrowse_server::ActionResult::Done => "done".into(),
-        vakbrowse_server::ActionResult::Clicked { navigated, url } => {
+        vakbrowse_server::ActionResult::Clicked {
+            navigated,
+            url,
+            opened_tab,
+        } => {
+            let opened = opened_tab
+                .as_ref()
+                .map(|t| format!(" (opened new tab {t}; `switch-tab` to follow it)"))
+                .unwrap_or_default();
             if navigated {
-                format!("navigated to {}", url.as_deref().unwrap_or(""))
+                format!("navigated to {}{opened}", url.as_deref().unwrap_or(""))
+            } else if !opened.is_empty() {
+                format!("no navigation in this tab{opened}")
             } else {
                 "no navigation (JS-handler click, non-navigating link, or bot wall; reopen with --click-recovery to force it — re-fires page handlers)".into()
             }

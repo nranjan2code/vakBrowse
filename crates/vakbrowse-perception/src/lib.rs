@@ -5,7 +5,7 @@
 //! *what agents see* and *how refs stay stable* across snapshots.
 
 use std::collections::HashMap;
-use vakbrowse_core::{ElementRef, Snapshot, SnapshotNode};
+use vakbrowse_core::{ElementRef, Heading, Snapshot, SnapshotNode};
 
 /// Flat AX node as produced by any backend. Tree order is reconstructed
 /// from `child_ids` (reading order = child order).
@@ -17,7 +17,17 @@ pub struct FlatAxNode {
     pub name: Option<String>,
     pub value: Option<String>,
     pub child_ids: Vec<String>,
+    /// Widget state tokens (see `SnapshotNode::state`).
+    pub state: Vec<String>,
+    /// Heading level for `role == "heading"`.
+    pub level: Option<u8>,
 }
+
+/// Hard cap on interactive elements per snapshot. Keeps a link-farm page from
+/// blowing an agent's context; the overflow is reported, not silently lost.
+pub const MAX_SNAPSHOT_ELEMENTS: usize = 500;
+const MAX_HEADINGS: usize = 40;
+const MAX_HEADING_CHARS: usize = 80;
 
 /// Roles an agent can act on. Everything else is prose, not a control.
 const INTERACTIVE_ROLES: &[&str] = &[
@@ -131,12 +141,31 @@ pub fn build_snapshot(
     }
 
     let mut elements = Vec::new();
+    let mut headings = Vec::new();
+    let mut omitted = 0usize;
     let mut ref_to_ax = HashMap::new();
 
     for node in order {
         let Some(role) = node.role.as_deref() else {
             continue;
         };
+        if role == "heading" {
+            let text: String = node
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !text.is_empty() && headings.len() < MAX_HEADINGS {
+                headings.push(Heading {
+                    before: elements.len(),
+                    level: node.level.unwrap_or(2).clamp(1, 6),
+                    text: text.chars().take(MAX_HEADING_CHARS).collect(),
+                });
+            }
+            continue;
+        }
         if SKIPPED_ROLES.contains(&role) {
             continue;
         }
@@ -146,6 +175,10 @@ pub fn build_snapshot(
             continue;
         }
 
+        if elements.len() >= MAX_SNAPSHOT_ELEMENTS {
+            omitted += 1;
+            continue;
+        }
         let r = book.assign(&node.id);
         ref_to_ax.insert(ElementRef(r.clone()), node.id.clone());
         elements.push(SnapshotNode {
@@ -153,7 +186,22 @@ pub fn build_snapshot(
             role: role.to_string(),
             name: node.name.clone().unwrap_or_default(),
             value: node.value.clone().filter(|v| !v.is_empty()),
-            clickable: matches!(role, "button" | "link" | "tab" | "menuitem"),
+            clickable: matches!(
+                role,
+                "button"
+                    | "link"
+                    | "tab"
+                    | "menuitem"
+                    | "menuitemcheckbox"
+                    | "menuitemradio"
+                    | "checkbox"
+                    | "radio"
+                    | "switch"
+                    | "option"
+                    | "treeitem"
+                    | "combobox"
+            ),
+            state: node.state.clone(),
         });
     }
 
@@ -162,6 +210,8 @@ pub fn build_snapshot(
             url: url.to_string(),
             title: title.to_string(),
             elements,
+            headings,
+            omitted,
         },
         ref_to_ax,
     }
@@ -179,6 +229,8 @@ mod tests {
             name: (!name.is_empty()).then(|| name.to_string()),
             value: None,
             child_ids: children.iter().map(|c| c.to_string()).collect(),
+            state: vec![],
+            level: None,
         }
     }
 
@@ -247,6 +299,45 @@ mod tests {
         let build = build_snapshot("u", "t", &flat, &mut book);
         assert_eq!(build.snapshot.elements.len(), 1);
         assert_eq!(build.snapshot.elements[0].role, "button");
+    }
+
+    #[test]
+    fn state_headings_and_clickable_form_controls() {
+        let mut cb = node("cb", "checkbox", "Subscribe", &[]);
+        cb.state = vec!["checked".into(), "disabled".into()];
+        let mut h = node("h", "heading", "  Shoes \n sale ", &[]);
+        h.level = Some(2);
+        let flat = vec![
+            node("root", "WebArea", "", &["h", "b1", "cb"]),
+            h,
+            node("b1", "button", "Buy", &[]),
+            cb,
+        ];
+        let mut book = RefBook::new();
+        let snap = build_snapshot("u", "t", &flat, &mut book).snapshot;
+        assert_eq!(snap.headings.len(), 1);
+        assert_eq!(snap.headings[0].text, "Shoes sale");
+        assert_eq!(snap.headings[0].before, 0, "heading precedes the button");
+        assert_eq!(snap.elements[1].state, ["checked", "disabled"]);
+        assert!(snap.elements[1].clickable, "checkboxes are clicked");
+    }
+
+    #[test]
+    fn oversized_pages_are_capped_and_counted() {
+        let n = MAX_SNAPSHOT_ELEMENTS + 25;
+        let ids: Vec<String> = (0..n).map(|i| format!("l{i}")).collect();
+        let mut flat = vec![node(
+            "root",
+            "WebArea",
+            "",
+            &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+        )];
+        flat.extend(ids.iter().map(|i| node(i, "link", "x", &[])));
+        let mut book = RefBook::new();
+        let build = build_snapshot("u", "t", &flat, &mut book);
+        assert_eq!(build.snapshot.elements.len(), MAX_SNAPSHOT_ELEMENTS);
+        assert_eq!(build.snapshot.omitted, 25);
+        assert_eq!(build.ref_to_ax.len(), MAX_SNAPSHOT_ELEMENTS);
     }
 
     #[test]

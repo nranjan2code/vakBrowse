@@ -172,7 +172,7 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **92 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
+  count is now **100 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
   Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
@@ -247,6 +247,26 @@ playground/
   `~/Library/Caches/vakbrowse/cft/{version}/{platform}/…` with a
   `{channel}.version` marker for offline reuse. System Chrome is the offline
   fallback (`cft::find_system_chrome`).
+- Snapshots carry widget **state** per element (`checked`/`unchecked`/`mixed`,
+  `disabled`, `expanded`/`collapsed`, `selected`, `required`), page **headings**
+  positioned among the elements (rendered as `## Title` lines, so repeated
+  "Read more" links are distinguishable) and are capped at 500 interactive
+  elements (`MAX_SNAPSHOT_ELEMENTS`; overflow is counted in `omitted` and
+  rendered as a note — omitted elements get no refs). Checkbox/radio/switch/
+  option/etc. are `clickable`. Iframe ref prefixes (`fN:`) are assigned on first
+  sight per tab, so a frame keeps its prefix when siblings come and go (root is
+  always `f0`).
+- `press_key` accepts chords: `Control+a`, `Shift+Tab`, `Meta+Enter`
+  (Alt/Control|Ctrl/Meta|Cmd/Shift; `+` alone is the plus key; unknown
+  modifiers are an error). Ctrl/Meta+a/c/x/v/z/y send CDP editing `commands`
+  because headless has no OS key bindings. `select_option` matches the option
+  value, then its label (trimmed, case-insensitive).
+- Tabs the page opens itself (`target=_blank`, `window.open`) are adopted into
+  the registry on `click`/`tabs`/`switch_tab`; a click reports
+  `opened_tab` (not made active — `switch_tab` to follow) and tabs the page
+  closed are dropped. `cookies` lists the browser's cookies (all origins, via
+  `Storage.getCookies`), and cookies carry `expires` (None = session cookie;
+  Chrome caps lifetimes at ~400 days).
 - Element refs look like `@e42` (`ElementRef`). Stable across snapshots,
   reset on navigation; stale refs return `VakError::NotFound`, never a misfire.
 - **CSS selector resolution** (`Action::FindByCss` → `ActionResult::Elements`;

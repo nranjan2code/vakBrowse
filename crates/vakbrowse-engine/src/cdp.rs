@@ -9,7 +9,9 @@ use crate::cft::{self, CftConfig};
 use crate::{ClickResult, EngineLauncher, LaunchOptions, Navigated, PageOps, validate_url};
 use chromiumoxide::Page;
 use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::accessibility::{AxNode, GetFullAxTreeParams};
+use chromiumoxide::cdp::browser_protocol::accessibility::{
+    AxNode, AxProperty, AxPropertyName, GetFullAxTreeParams,
+};
 use chromiumoxide::cdp::browser_protocol::browser::{
     SetDownloadBehaviorBehavior, SetDownloadBehaviorParams,
 };
@@ -22,8 +24,9 @@ use chromiumoxide::cdp::browser_protocol::input::{
     MouseButton,
 };
 use chromiumoxide::cdp::browser_protocol::network::{
-    ClearBrowserCookiesParams, CookieParam, GetCookiesParams, SetCookiesParams,
+    ClearBrowserCookiesParams, CookieParam, SetCookiesParams, TimeSinceEpoch,
 };
+use chromiumoxide::cdp::browser_protocol::storage::GetCookiesParams;
 use chromiumoxide::cdp::browser_protocol::page::{
     AddScriptToEvaluateOnNewDocumentParams, CaptureScreenshotFormat, CaptureScreenshotParams,
     FrameId, GetFrameTreeParams,
@@ -69,6 +72,73 @@ fn stringify_js(v: serde_json::Value) -> String {
             serde_json::to_string(&v).unwrap_or_else(|e| format!("<unserializable value: {e}>"))
         }
     }
+}
+
+fn ax_truthy(v: &serde_json::Value) -> bool {
+    v.as_bool().unwrap_or_else(|| v.as_str() == Some("true"))
+}
+
+/// Widget state tokens + heading level from an AX node's properties.
+fn ax_state(props: &[AxProperty]) -> (Vec<String>, Option<u8>) {
+    let mut state = Vec::new();
+    let mut level = None;
+    for p in props {
+        let Some(v) = p.value.value.as_ref() else {
+            continue;
+        };
+        match p.name {
+            AxPropertyName::Checked => state.push(
+                match v.as_str().unwrap_or(if ax_truthy(v) { "true" } else { "false" }) {
+                    "true" => "checked",
+                    "mixed" => "mixed",
+                    _ => "unchecked",
+                }
+                .to_string(),
+            ),
+            AxPropertyName::Disabled if ax_truthy(v) => state.push("disabled".into()),
+            AxPropertyName::Expanded => state.push(
+                if ax_truthy(v) { "expanded" } else { "collapsed" }.to_string(),
+            ),
+            AxPropertyName::Selected if ax_truthy(v) => state.push("selected".into()),
+            AxPropertyName::Required if ax_truthy(v) => state.push("required".into()),
+            AxPropertyName::Level => level = v.as_u64().map(|n| n.min(6) as u8),
+            _ => {}
+        }
+    }
+    (state, level)
+}
+
+const MOD_ALT: i64 = 1;
+const MOD_CTRL: i64 = 2;
+const MOD_META: i64 = 4;
+const MOD_SHIFT: i64 = 8;
+
+/// Split `"Control+Shift+a"` into (CDP modifier bitmask, base key).
+/// A lone `"+"` is the plus key; unknown modifier names are an error rather
+/// than being silently dropped.
+fn parse_key_combo(spec: &str) -> Result<(i64, String)> {
+    if spec.chars().count() <= 1 || !spec.contains('+') {
+        return Ok((0, spec.to_string()));
+    }
+    let (mods_part, base) = match spec.strip_suffix("++") {
+        Some(head) => (head, "+"),
+        None => spec.rsplit_once('+').unwrap_or(("", spec)),
+    };
+    let mut mods = 0;
+    for m in mods_part.split('+').filter(|m| !m.is_empty()) {
+        mods |= match m.to_ascii_lowercase().as_str() {
+            "alt" | "option" => MOD_ALT,
+            "control" | "ctrl" => MOD_CTRL,
+            "meta" | "cmd" | "command" => MOD_META,
+            "shift" => MOD_SHIFT,
+            other => {
+                return Err(VakError::Unsupported(format!(
+                    "unknown modifier {other:?} in key {spec:?}"
+                )));
+            }
+        };
+    }
+    Ok((mods, base.to_string()))
 }
 
 #[cfg(unix)]
@@ -297,6 +367,7 @@ impl EngineLauncher for CdpLauncher {
             refs: vakbrowse_perception::RefBook::new(),
             ref_to_ax: HashMap::new(),
             ax_to_backend: HashMap::new(),
+            frame_index: HashMap::new(),
         };
         let mut tabs = HashMap::new();
         tabs.insert(TabId("t1".into()), first);
@@ -342,6 +413,10 @@ struct TabState {
     refs: vakbrowse_perception::RefBook,
     ref_to_ax: HashMap<ElementRef, String>,
     ax_to_backend: HashMap<String, BackendNodeId>,
+    /// Frame id -> `fN:` prefix index, assigned on first sight so a frame
+    /// keeps its ref prefix when siblings appear or disappear. The root
+    /// frame is always `f0` (clicks route on that prefix).
+    frame_index: HashMap<String, usize>,
 }
 
 /// One browser process with a tab registry. Dropping it tears the process
@@ -413,6 +488,7 @@ impl CdpSession {
         let mut flat = Vec::with_capacity(nodes.len());
         let mut backends = HashMap::new();
         for n in nodes {
+            let (state, level) = ax_state(n.properties.as_deref().unwrap_or(&[]));
             let id = format!("{prefix}{}", n.node_id.as_ref());
             if !n.ignored
                 && let Some(b) = n.backend_dom_node_id
@@ -435,6 +511,8 @@ impl CdpSession {
                 role: s(n.role),
                 name: s(n.name),
                 value: s(n.value),
+                state,
+                level,
             });
         }
         (flat, backends)
@@ -443,12 +521,12 @@ impl CdpSession {
     /// Collect flat AX nodes from every frame in the frame tree
     /// (root document first, then children depth-first).
     async fn collect_frames(
-        tab: &TabState,
+        tab: &mut TabState,
     ) -> Result<(
         Vec<vakbrowse_perception::FlatAxNode>,
         HashMap<String, BackendNodeId>,
     )> {
-        let page = &tab.page;
+        let page = tab.page.clone();
         let tree = page
             .execute(GetFrameTreeParams {})
             .await
@@ -461,7 +539,8 @@ impl CdpSession {
         while let Some(node) = stack.pop() {
             frame_ids.push(node.frame.id);
             if let Some(children) = node.child_frames {
-                for c in children {
+                // Reversed so children pop in document order.
+                for c in children.into_iter().rev() {
                     stack.push(c);
                 }
             }
@@ -486,7 +565,16 @@ impl CdpSession {
                     continue;
                 }
             };
-            let prefix = format!("f{i}:");
+            let idx = if i == 0 {
+                0
+            } else {
+                let next = tab.frame_index.len() + 1;
+                *tab
+                    .frame_index
+                    .entry(frame_id.as_ref().to_string())
+                    .or_insert(next)
+            };
+            let prefix = format!("f{idx}:");
             let (flat, backends) = Self::flatten(&prefix, resp.result.nodes);
             all_flat.extend(flat);
             all_backends.extend(backends);
@@ -822,10 +910,19 @@ function(val) {
     const el = this;
     if (!el) return 'no-element';
     if (el.tagName !== 'SELECT') return 'wrong-tag:' + el.tagName;
-    el.value = val;
+    const want = String(val);
+    const opts = Array.from(el.options);
+    // Exact value first, then the visible label (agents usually know the label).
+    let opt = opts.find(o => o.value === want);
+    if (!opt) {
+      const w = want.trim().toLowerCase();
+      opt = opts.find(o => o.label.trim().toLowerCase() === w || o.text.trim().toLowerCase() === w);
+    }
+    if (!opt) return false;
+    el.value = opt.value;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    return el.value === val;
+    return el.value === opt.value;
   } catch (e) {
     return 'error:' + e.message;
   }
@@ -982,7 +1079,7 @@ impl PageOps for CdpSession {
         }
         let title = self.title().await?;
         let url = self.tab().current_url.clone();
-        let (flat, backends) = Self::collect_frames(self.tab()).await?;
+        let (flat, backends) = Self::collect_frames(self.tab_mut()).await?;
         let build =
             vakbrowse_perception::build_snapshot(&url, &title, &flat, &mut self.tab_mut().refs);
         let state = self.tab_mut();
@@ -1026,82 +1123,11 @@ impl PageOps for CdpSession {
     }
 
     async fn click(&mut self, r: &ElementRef) -> Result<ClickResult> {
-        self.maybe_human_jitter().await;
-        let ax_id = self
-            .tab()
-            .ref_to_ax
-            .get(r)
-            .ok_or_else(|| VakError::NotFound(format!("stale element ref {r}")))?
-            .clone();
-        let backend = self.backend_for(r)?;
-
-        // Root frame: trusted input at page-level coordinates.
-        if ax_id.starts_with("f0:") {
-            // Classify the target *before* dispatching input: a navigation that
-            // the click triggers swaps the document and makes the resolved
-            // `backend` (a BackendNodeId) invalid, so we must read the href
-            // before the mouse events fire. Only `<a href>` with a real,
-            // cross-document href is expected to navigate — everything else
-            // (inputs, buttons, `javascript:`/fragment anchors) is treated as
-            // non-navigating and returns immediately.
-            let href = self.navigating_href(backend).await?;
-            // Scroll the target into view first. DOM.getBoxModel returns
-            // viewport-relative coords, so an element below the fold (e.g. a
-            // Bing search result) would otherwise be clicked at a viewport
-            // point where nothing is rendered and the click silently misses.
-            // scrollIntoView updates the scroll offset so the fresh box-model
-            // center lands on the visible element.
-            let _ = self
-                .call_on_element(
-                    backend,
-                    "function(){this.scrollIntoView({block:'center'});return true;}",
-                    vec![],
-                )
-                .await;
-            // Capture the URL *before* dispatching input: a navigation that
-            // the click triggers swaps the document (invalidating `backend`)
-            // and mutates the URL, so the before/after comparison is the only
-            // reliable signal — `wait_for_navigation`'s result is not (it can
-            // resolve spuriously on a non-navigating click).
-            let before = self
-                .tab()
-                .page
-                .url()
-                .await
-                .map_err(proto_err)?
-                .unwrap_or_default();
-            let (cx, cy) = self.box_center(backend).await?;
-            self.click_at(cx, cy).await?;
-            // Surface whether an anchor click navigated. Snapshot also self-heals
-            // the URL on the next call, but reconciling now lets a following
-            // wait_url/extract see the new page immediately — and, crucially,
-            // lets the agent *observe* a silent bot wall (Bing/DDG accept the
-            // click but never fire a navigation). `href` is `Some` only for
-            // real `<a href>` anchors; everything else returns `stayed()` in O(1).
-            return if let Some(href) = href {
-                self.probe_click_navigation(backend, href, before).await
-            } else {
-                Ok(ClickResult::stayed())
-            };
+        let mut out = self.click_inner(r).await?;
+        if let Some(tab) = self.sync_tabs().await.into_iter().next() {
+            out.opened_tab = Some(tab.0);
         }
-        // Child frames: DOM click on the resolved element. We can't dispatch
-        // trusted mouse events to child frames (box coords are frame-relative),
-        // but a DOM `.click()` fires the element's handlers. After it fires,
-        // check for a top-level URL change — this catches `_top`-targeting
-        // anchors and JS-driven `location.href` assignments that originate in
-        // the iframe. Same-frame iframe navigations (the iframe's URL changes
-        // but the top-level URL does not) remain invisible — a documented
-        // limitation, since detecting them would require per-frame URL queries.
-        let page = self.tab().page.clone();
-        let before = page.url().await.map_err(proto_err)?.unwrap_or_default();
-        let ok = self
-            .call_on_element(backend, FRAME_CLICK_JS, vec![])
-            .await?;
-        let _ = ok;
-        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_NAV_TIMEOUT).await {
-            return self.reconcile_click_navigation(url).await;
-        }
-        Ok(ClickResult::stayed())
+        Ok(out)
     }
 
     async fn fill(&mut self, r: &ElementRef, text: &str) -> Result<()> {
@@ -1142,8 +1168,10 @@ impl PageOps for CdpSession {
 
     async fn press_key(&mut self, key: &str) -> Result<()> {
         self.maybe_human_jitter().await;
-        let (code, key_name, vk, text): (String, String, i64, Option<&str>) = match key {
-            "Enter" => ("Enter".into(), "Enter".into(), 13, Some("\r")),
+        let (mods, base) = parse_key_combo(key)?;
+        let (code, key_name, vk, text): (String, String, i64, Option<String>) = match base.as_str()
+        {
+            "Enter" => ("Enter".into(), "Enter".into(), 13, Some("\r".into())),
             "Tab" => ("Tab".into(), "Tab".into(), 9, None),
             "Escape" => ("Escape".into(), "Escape".into(), 27, None),
             "Backspace" => ("Backspace".into(), "Backspace".into(), 8, None),
@@ -1158,12 +1186,20 @@ impl PageOps for CdpSession {
             "PageDown" => ("PageDown".into(), "PageDown".into(), 34, None),
             k if k.chars().count() == 1 => {
                 let c = k.chars().next().expect("len checked");
-                let code = if c == ' ' {
-                    "Space".to_string()
-                } else {
-                    c.to_ascii_uppercase().to_string()
+                let code = match c {
+                    ' ' => "Space".to_string(),
+                    c if c.is_ascii_alphabetic() => format!("Key{}", c.to_ascii_uppercase()),
+                    c if c.is_ascii_digit() => format!("Digit{c}"),
+                    other => other.to_string(),
                 };
-                (code, k.to_string(), c.to_ascii_uppercase() as i64, Some(k))
+                let shown = if mods & MOD_SHIFT != 0 {
+                    c.to_uppercase().to_string()
+                } else {
+                    k.to_string()
+                };
+                // Ctrl/Alt/Meta chords are commands, not typed characters.
+                let typed = (mods & (MOD_CTRL | MOD_ALT | MOD_META) == 0).then(|| shown.clone());
+                (code, shown, c.to_ascii_uppercase() as i64, typed)
             }
             other => {
                 return Err(VakError::Unsupported(format!("key {other:?}")));
@@ -1174,19 +1210,40 @@ impl PageOps for CdpSession {
         } else {
             DispatchKeyEventType::RawKeyDown
         };
+        // Headless has no OS key bindings: editing shortcuts must be named.
+        let commands: Vec<&str> = if mods & (MOD_CTRL | MOD_META) != 0 {
+            match (base.to_ascii_lowercase().as_str(), mods & MOD_SHIFT != 0) {
+                ("a", _) => vec!["selectAll"],
+                ("c", _) => vec!["copy"],
+                ("x", _) => vec!["cut"],
+                ("v", _) => vec!["paste"],
+                ("z", false) => vec!["undo"],
+                ("z", true) | ("y", _) => vec!["redo"],
+                _ => vec![],
+            }
+        } else {
+            vec![]
+        };
 
-        let down = DispatchKeyEventParams::builder()
+        let mut down = DispatchKeyEventParams::builder()
             .r#type(key_type)
+            .modifiers(mods)
             .key(key_name.clone())
             .code(code.clone())
             .windows_virtual_key_code(vk)
-            .text(text.unwrap_or_default().to_string())
-            .build()
+            .text(text.clone().unwrap_or_default());
+        if !commands.is_empty() {
+            down = down.commands(commands);
+        }
+        self.tab()
+            .page
+            .execute(down.build().map_err(proto_err)?)
+            .await
             .map_err(proto_err)?;
-        self.tab().page.execute(down).await.map_err(proto_err)?;
 
         let up = DispatchKeyEventParams::builder()
             .r#type(DispatchKeyEventType::KeyUp)
+            .modifiers(mods)
             .key(key_name)
             .code(code)
             .windows_virtual_key_code(vk)
@@ -1283,6 +1340,8 @@ impl PageOps for CdpSession {
                 http_only: c.http_only,
                 session: c.session,
                 same_site: c.same_site.map(|s| s.as_ref().to_string()),
+                // CDP reports session cookies with expires == -1.
+                expires: (c.expires > 0.0).then_some(c.expires),
             })
             .collect())
     }
@@ -1295,6 +1354,9 @@ impl PageOps for CdpSession {
             .path(cookie.path.clone())
             .secure(cookie.secure)
             .http_only(cookie.http_only);
+        if let Some(exp) = cookie.expires {
+            builder = builder.expires(TimeSinceEpoch::new(exp));
+        }
         if let Some(ss) = &cookie.same_site {
             builder =
                 match ss.parse::<chromiumoxide::cdp::browser_protocol::network::CookieSameSite>() {
@@ -1457,7 +1519,13 @@ impl PageOps for CdpSession {
         self.history_go("location.reload()").await
     }
 
-    async fn tabs(&self) -> Result<Vec<TabInfo>> {
+    async fn tabs(&mut self) -> Result<Vec<TabInfo>> {
+        self.sync_tabs().await;
+        for t in self.tabs.values_mut() {
+            if let Ok(Some(url)) = t.page.url().await {
+                t.current_url = url;
+            }
+        }
         let mut list: Vec<TabInfo> = self
             .tabs
             .iter()
@@ -1466,8 +1534,8 @@ impl PageOps for CdpSession {
                 url: t.current_url.clone(),
             })
             .collect();
-        list.sort_by(|a, b| a.id.0.cmp(&b.id.0));
-        // Active tab first.
+        // Numeric order (t2 before t10), active tab first.
+        list.sort_by_key(|t| t.id.0.trim_start_matches('t').parse::<u64>().unwrap_or(u64::MAX));
         if let Some(pos) = list.iter().position(|t| t.id == self.active) {
             let active = list.remove(pos);
             list.insert(0, active);
@@ -1494,6 +1562,7 @@ impl PageOps for CdpSession {
             refs: vakbrowse_perception::RefBook::new(),
             ref_to_ax: HashMap::new(),
             ax_to_backend: HashMap::new(),
+            frame_index: HashMap::new(),
         };
 
         if let Some(url) = url {
@@ -1518,6 +1587,9 @@ impl PageOps for CdpSession {
     }
 
     async fn switch_tab(&mut self, tab: &TabId) -> Result<()> {
+        if !self.tabs.contains_key(tab) {
+            self.sync_tabs().await;
+        }
         if !self.tabs.contains_key(tab) {
             return Err(VakError::NotFound(format!("unknown tab {tab}")));
         }
@@ -1642,6 +1714,159 @@ fn human_jitter() -> std::time::Duration {
 }
 
 impl CdpSession {
+    /// Reconcile the tab registry with the browser's real targets: adopt tabs
+    /// the page opened (returned, in order) and drop tabs that were closed.
+    /// A failed target listing leaves the registry untouched.
+    async fn sync_tabs(&mut self) -> Vec<TabId> {
+        let Ok(pages) = self.browser.pages().await else {
+            return Vec::new();
+        };
+        if pages.is_empty() {
+            return Vec::new();
+        }
+        let live: std::collections::HashSet<String> = pages
+            .iter()
+            .map(|p| p.target_id().as_ref().to_string())
+            .collect();
+        let known: std::collections::HashSet<String> = self
+            .tabs
+            .values()
+            .map(|t| t.page.target_id().as_ref().to_string())
+            .collect();
+
+        let mut adopted = Vec::new();
+        for page in pages {
+            if known.contains(page.target_id().as_ref() as &str) {
+                continue;
+            }
+            if let Some(stealth) = &self.stealth {
+                let _ = apply_stealth(&page, stealth).await;
+            }
+            let url = page
+                .url()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "about:blank".into());
+            let id = TabId(format!("t{}", self.next_tab));
+            self.next_tab += 1;
+            self.tabs.insert(
+                id.clone(),
+                TabState {
+                    page,
+                    current_url: url,
+                    refs: vakbrowse_perception::RefBook::new(),
+                    ref_to_ax: HashMap::new(),
+                    ax_to_backend: HashMap::new(),
+                    frame_index: HashMap::new(),
+                },
+            );
+            tracing::info!(tab = %id, "adopted page-opened tab");
+            adopted.push(id);
+        }
+
+        if self.tabs.len() > 1 {
+            let gone: Vec<TabId> = self
+                .tabs
+                .iter()
+                .filter(|(_, t)| !live.contains(t.page.target_id().as_ref() as &str))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in gone {
+                if self.tabs.len() > 1 {
+                    self.tabs.remove(&id);
+                    tracing::info!(tab = %id, "dropped tab closed by the page");
+                }
+            }
+            if !self.tabs.contains_key(&self.active)
+                && let Some(next) = self.tabs.keys().next().cloned()
+            {
+                self.active = next;
+                self.pointer = (0.0, 0.0);
+            }
+        }
+        adopted
+    }
+
+    async fn click_inner(&mut self, r: &ElementRef) -> Result<ClickResult> {
+        self.maybe_human_jitter().await;
+        let ax_id = self
+            .tab()
+            .ref_to_ax
+            .get(r)
+            .ok_or_else(|| VakError::NotFound(format!("stale element ref {r}")))?
+            .clone();
+        let backend = self.backend_for(r)?;
+
+        // Root frame: trusted input at page-level coordinates.
+        if ax_id.starts_with("f0:") {
+            // Classify the target *before* dispatching input: a navigation that
+            // the click triggers swaps the document and makes the resolved
+            // `backend` (a BackendNodeId) invalid, so we must read the href
+            // before the mouse events fire. Only `<a href>` with a real,
+            // cross-document href is expected to navigate — everything else
+            // (inputs, buttons, `javascript:`/fragment anchors) is treated as
+            // non-navigating and returns immediately.
+            let href = self.navigating_href(backend).await?;
+            // Scroll the target into view first. DOM.getBoxModel returns
+            // viewport-relative coords, so an element below the fold (e.g. a
+            // Bing search result) would otherwise be clicked at a viewport
+            // point where nothing is rendered and the click silently misses.
+            // scrollIntoView updates the scroll offset so the fresh box-model
+            // center lands on the visible element.
+            let _ = self
+                .call_on_element(
+                    backend,
+                    "function(){this.scrollIntoView({block:'center'});return true;}",
+                    vec![],
+                )
+                .await;
+            // Capture the URL *before* dispatching input: a navigation that
+            // the click triggers swaps the document (invalidating `backend`)
+            // and mutates the URL, so the before/after comparison is the only
+            // reliable signal — `wait_for_navigation`'s result is not (it can
+            // resolve spuriously on a non-navigating click).
+            let before = self
+                .tab()
+                .page
+                .url()
+                .await
+                .map_err(proto_err)?
+                .unwrap_or_default();
+            let (cx, cy) = self.box_center(backend).await?;
+            self.click_at(cx, cy).await?;
+            // Surface whether an anchor click navigated. Snapshot also self-heals
+            // the URL on the next call, but reconciling now lets a following
+            // wait_url/extract see the new page immediately — and, crucially,
+            // lets the agent *observe* a silent bot wall (Bing/DDG accept the
+            // click but never fire a navigation). `href` is `Some` only for
+            // real `<a href>` anchors; everything else returns `stayed()` in O(1).
+            return if let Some(href) = href {
+                self.probe_click_navigation(backend, href, before).await
+            } else {
+                Ok(ClickResult::stayed())
+            };
+        }
+        // Child frames: DOM click on the resolved element. We can't dispatch
+        // trusted mouse events to child frames (box coords are frame-relative),
+        // but a DOM `.click()` fires the element's handlers. After it fires,
+        // check for a top-level URL change — this catches `_top`-targeting
+        // anchors and JS-driven `location.href` assignments that originate in
+        // the iframe. Same-frame iframe navigations (the iframe's URL changes
+        // but the top-level URL does not) remain invisible — a documented
+        // limitation, since detecting them would require per-frame URL queries.
+        let page = self.tab().page.clone();
+        let before = page.url().await.map_err(proto_err)?.unwrap_or_default();
+        let ok = self
+            .call_on_element(backend, FRAME_CLICK_JS, vec![])
+            .await?;
+        let _ = ok;
+        if let Some(url) = Self::wait_url_change(&page, &before, CLICK_NAV_TIMEOUT).await {
+            return self.reconcile_click_navigation(url).await;
+        }
+        Ok(ClickResult::stayed())
+    }
+
     /// The `href` of `backend` iff it is a navigating anchor (`<a href>` whose
     /// href is neither empty/fragment/`javascript:`/`mailto:`/`tel:`), else
     /// `None`. Cheap and read-only — safe to call before input is dispatched
@@ -1758,6 +1983,22 @@ impl CdpSession {
         // A document change makes the last pointer position meaningless.
         self.pointer = (0.0, 0.0);
         Ok(ClickResult::navigated(url))
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn key_combos() {
+        assert_eq!(parse_key_combo("Enter").unwrap(), (0, "Enter".into()));
+        assert_eq!(parse_key_combo("a").unwrap(), (0, "a".into()));
+        assert_eq!(parse_key_combo("+").unwrap(), (0, "+".into()));
+        assert_eq!(parse_key_combo("Control+a").unwrap(), (2, "a".into()));
+        assert_eq!(parse_key_combo("ctrl+Shift+Tab").unwrap(), (10, "Tab".into()));
+        assert_eq!(parse_key_combo("Meta++").unwrap(), (4, "+".into()));
+        assert!(parse_key_combo("Hyper+a").is_err());
     }
 }
 

@@ -244,7 +244,8 @@ async fn wire_self_test() -> vakbrowse_core::Result<()> {
             clicked,
             ActionResult::Clicked {
                 navigated: false,
-                url: None
+                url: None,
+                ..
             }
         ),
         "click -> Clicked{{navigated=false}}, got {clicked:?}"
