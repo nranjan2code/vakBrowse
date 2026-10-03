@@ -467,3 +467,77 @@ async fn live_navigation_and_snapshot() {
         "expected at least one link in a11y snapshot"
     );
 }
+
+/// Serve `tests/fixtures` over loopback HTTP, delaying every `.css` response
+/// by `css_delay` (a slow render-blocking stylesheet, as on a CDN). Hermetic:
+/// binds 127.0.0.1 only. Returns the base URL.
+fn serve_fixtures_slow_css(css_delay: std::time::Duration) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    return;
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("/");
+                let name = path.trim_start_matches('/').split('?').next().unwrap_or("");
+                // Drain headers.
+                let mut h = String::new();
+                while reader.read_line(&mut h).is_ok_and(|n| n > 2) {
+                    h.clear();
+                }
+                let file = (!name.contains("..")).then(|| std::fs::read(root.join(name)).ok());
+                let mut out = &stream;
+                let Some(Some(body)) = file else {
+                    let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    return;
+                };
+                let ctype = if name.ends_with(".css") {
+                    std::thread::sleep(css_delay);
+                    "text/css"
+                } else {
+                    "text/html; charset=utf-8"
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = out.write_all(head.as_bytes());
+                let _ = out.write_all(&body);
+            });
+        }
+    });
+    base
+}
+
+/// Regression: a second click after a click-driven navigation must also
+/// navigate (quotes.toscrape.com: Next -> /page/2/ worked, Next again was
+/// reported "no navigation"). The click returned at URL commit while the
+/// landed page was still render-blocked on its stylesheet, so the next
+/// trusted click hit an unpainted, about-to-reflow document. A -> B -> C via
+/// consecutive clicks on `li.next a`, each resolved fresh via `find_by_css`.
+#[tokio::test]
+async fn consecutive_click_navigations_chain() {
+    let _g = common::browser_lock().acquire().await.unwrap();
+    let base = serve_fixtures_slow_css(std::time::Duration::from_millis(1500));
+    let launcher = CdpLauncher::default();
+    let mut session = launcher.launch(&LaunchOptions::default()).await.unwrap();
+    session.navigate(&format!("{base}chain_a.html")).await.unwrap();
+
+    for want in ["chain_b.html", "chain_c.html"] {
+        let refs = session.find_by_css("li.next a").await.unwrap();
+        let next = refs.first().expect("Next link resolves to a ref").clone();
+        let out = session.click(&next).await.unwrap();
+        assert!(out.navigated, "click to {want} did not navigate: {out:?}");
+        let url = out.url.unwrap();
+        assert!(url.ends_with(want), "landed on {url}, wanted {want}");
+        let snap = session.snapshot().await.unwrap();
+        assert!(snap.url.ends_with(want), "snapshot url {}", snap.url);
+    }
+}

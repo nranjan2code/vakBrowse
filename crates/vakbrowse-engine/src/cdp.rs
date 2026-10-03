@@ -1015,6 +1015,11 @@ const CLICK_NAV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1)
 /// `location.href =`) before we give up on a bot-walled anchor click.
 const CLICK_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(600);
 
+/// How long a click-driven navigation waits for the landed document's
+/// `readyState === 'complete'` before returning anyway (slow third-party
+/// subresources must not stall the agent indefinitely).
+const CLICK_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Dispatch input + change events on a file input after setting its files.
 const SET_FILES_EVENTS_JS: &str = r#"() => {
     this.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1914,6 +1919,27 @@ impl CdpSession {
         Ok(ClickResult::stayed())
     }
 
+    /// Wait (bounded) for the document a click navigated to to finish loading.
+    /// The URL flips at commit, long before render-blocking stylesheets
+    /// arrive; returning then hands the agent an unpainted, about-to-reflow
+    /// document, and its next trusted click is dropped or misses. Mirrors `navigate()`, which waits for
+    /// load via `goto`. Evaluation errors (context swapped mid-poll) retry.
+    async fn wait_document_loaded(page: &Page, budget: std::time::Duration) {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            if let Ok(v) = page.evaluate("document.readyState").await
+                && v.into_value::<String>().is_ok_and(|s| s == "complete")
+            {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::debug!("click-navigated document still loading after {budget:?}");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     /// The `href` of `backend` iff it is a navigating anchor (`<a href>` whose
     /// href is neither empty/fragment/`javascript:`/`mailto:`/`tel:`), else
     /// `None`. Cheap and read-only — safe to call before input is dispatched
@@ -2022,6 +2048,12 @@ impl CdpSession {
     /// Reconcile session state after an observed click-driven navigation:
     /// adopt the live URL and start a fresh ref turn (refs map to a document).
     async fn reconcile_click_navigation(&mut self, url: String) -> Result<ClickResult> {
+        let page = self.tab().page.clone();
+        Self::wait_document_loaded(&page, CLICK_LOAD_TIMEOUT).await;
+        let url = match page.url().await {
+            Ok(Some(live)) if !live.is_empty() => live,
+            _ => url,
+        };
         let state = self.tab_mut();
         state.current_url = url.clone();
         state.refs.reset();

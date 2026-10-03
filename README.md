@@ -65,16 +65,23 @@ capability once, all five surfaces get it.
 - **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
   CDP screenshots, batch studio, console REPL, cookie manager, and tour guide.
 
-114 tests, clippy clean. Hardened against real environments: launch args verified
+115 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):
 anchor clicks are probed for a URL change (ground truth, not the unreliable
 `wait_for_navigation` result) so a bot-wall click — Bing/DDG accept the click
-but never navigate — surfaces as `navigated:false` + a daemon WARN, then
-**recovers** via a ground-truth DOM `.click()` and a forced `location.href =`
-assignment (defeats click-interception walls; proven by the `preventDefault`
-fixture) before giving up honestly, instead of the old silent `Done`. Honest
+but never navigate — surfaces as `navigated:false` + a daemon WARN instead of
+the old silent `Done`. **Recovery is opt-in** (`--click-recovery` /
+`browser_open {click_recovery:true}`): only then does the click escalate to a
+ground-truth DOM `.click()` and a forced `location.href =` assignment (defeats
+click-interception walls; proven by the `preventDefault` fixture) before giving
+up honestly. It is off by default because the escalation re-fires the link's
+handlers — an add-to-cart/vote/delete link could run up to three times. A
+navigating click returns only once the landed document has loaded
+(`readyState === 'complete'`, bounded at 5s) — like `navigate()` — so chained
+click-throughs (pager "Next" → "Next") don't fire trusted input into a page
+still render-blocked on its stylesheet, which used to drop the second click. Honest
 bot-wall findings: Bing blocks ALL synthetic navigation (a trusted
 mouse-event click AND a ground-truth DOM `element.click()` both leave the
 browser on the SERP, even under `--stealth` — their detection is behavioral,

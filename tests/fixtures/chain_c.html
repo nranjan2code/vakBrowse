@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- The regression test serves this stylesheet slowly over loopback HTTP:
+         it is render-blocking, so a click-landed page is unpainted (and
+         drops trusted input) until it arrives. -->
+    <link rel="stylesheet" href="chain.css" />
+    <title>Chain page c</title>
+  </head>
+  <body>
+    <!-- Multi-page pager (quotes.toscrape-style): the Next link sits below
+         the fold, pushed there by the stylesheet. -->
+    <h1>page c</h1>
+    <div class="spacer">content c</div>
+    <ul class="pager">
+      <li class="previous"><a href="chain_a.html">Previous</a></li>
+    </ul>
+  </body>
+</html>

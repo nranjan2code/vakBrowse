@@ -172,10 +172,15 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **114 passed / 0 failed / 2 ignored** on macOS (the 104 before
-  the extract card-layout + windowing work were also verified on Linux-root
-  and Linux-uid1000), clippy clean (removed 35 chrome-free DOM-backend tests — the
-  `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
+  count is now **115 passed / 0 failed / 2 ignored** on macOS (the +1 over
+  114 is `consecutive_click_navigations_chain`; the click-load fix was verified
+  on Linux-uid1000 before the extract card-layout work merged, and the 104
+  before both on Linux-root and Linux-uid1000), clippy clean. Linux-root on a
+  cold container (CFT download under amd64 emulation) can time out the first
+  `vakbrowse-api/tests/http.rs` session opens (500 on open); a warm re-run is
+  green — re-run before treating it as a regression.
+  (Earlier, 35 chrome-free DOM-backend tests were removed — the
+  `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only.)
   New chrome-launching server tests are guarded by
   `browser_lock()` (serialized per test binary) to keep
   `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
@@ -335,6 +340,17 @@ playground/
   escalation re-fires the element's handlers — a link whose JS handler already
   did something (add-to-cart, vote, delete) would run up to three times
   (`click_recovery_is_off_by_default`).
+  A click-driven navigation is reported only after the landed document
+  reaches `readyState === 'complete'` (bounded by `CLICK_LOAD_TIMEOUT`, 5s;
+  timeout proceeds, never errors) — the same contract `navigate()` gets from
+  `goto`. The URL flips at commit, well before render-blocking stylesheets
+  arrive; returning then let the agent's *next* click compute a box center on
+  an unpainted, unstyled document, and Chrome dropped the trusted press
+  (quotes.toscrape.com: Next → /page/2/ worked, Next again reported
+  `navigated:false`; a snapshot in between did not help because snapshots
+  don't wait for load). Regression: `consecutive_click_navigations_chain`
+  serves `tests/fixtures/chain_{a,b,c}.html` from a loopback HTTP server that
+  delays `chain.css` by 1.5s (file:// loads too fast to reproduce).
 - `fill` focuses the element before setting its value; the human pattern
   fill -> press_key(Enter) therefore submits forms and SPA search boxes.
   Note for agent loops: on client-side SPAs (e.g. Wikipedia) `document.readyState`
