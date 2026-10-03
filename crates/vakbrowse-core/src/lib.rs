@@ -24,6 +24,10 @@ pub enum VakError {
     Unsupported(String),
     #[error("timeout: {0}")]
     Timeout(String),
+    /// Capacity is exhausted (memory budget, CPU slots, or the admission
+    /// queue is full / the wait expired). Nothing was done; retry later.
+    #[error("busy: {0}")]
+    Busy(String),
 }
 
 macro_rules! id_type {

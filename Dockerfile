@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
+# Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -t vakbrowse .
+# The frontend is plain static files, so it builds once on the native
+# platform; the Rust stages and the baked chrome-headless-shell follow the
+# target platform (Chrome for Testing ships linux64 and linux-arm64).
 
 # ---- frontend ----
-FROM --platform=linux/amd64 node:22-bookworm AS frontend
+FROM --platform=$BUILDPLATFORM node:22-bookworm AS frontend
 WORKDIR /playground
 COPY playground/frontend/package.json playground/frontend/*.config.* playground/frontend/tsconfig.json ./
 RUN npm install
@@ -9,7 +13,7 @@ COPY playground/frontend/ ./
 RUN NODE_ENV=production npm run build  # outputs to ../static (playground/static)
 
 # ---- build ----
-FROM --platform=linux/amd64 rust:1-bookworm AS build
+FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY --from=frontend /static /src/playground/static
 COPY . .
@@ -18,7 +22,7 @@ RUN cargo build --release -p vakd -p vakbrowse-api -p vakbrowse-cli -p vakbrowse
  && ./target/release/vakd doctor --no-probe   # bakes the pinned chrome-headless-shell into the image cache
 
 # ---- runtime ----
-FROM --platform=linux/amd64 debian:bookworm-slim
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates fonts-liberation \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \

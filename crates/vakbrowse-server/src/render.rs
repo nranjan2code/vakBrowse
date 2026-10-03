@@ -37,7 +37,11 @@ pub fn snapshot_text(s: &Snapshot) -> String {
         out.push('\n');
     }
     for h in headings {
-        out.push_str(&format!("{} {}\n", "#".repeat(h.level as usize), compact(&h.text, 80)));
+        out.push_str(&format!(
+            "{} {}\n",
+            "#".repeat(h.level as usize),
+            compact(&h.text, 80)
+        ));
     }
     if s.omitted > 0 {
         out.push_str(&format!(
@@ -59,6 +63,40 @@ fn compact(s: &str, max: usize) -> String {
     }
     let cut: String = one_line.chars().take(max).collect();
     format!("{cut}…")
+}
+
+/// One-screen capacity report (`status` on every text surface).
+pub fn status_text(st: &crate::governor::ResourceStatus) -> String {
+    let on = |b: bool| if b { "on" } else { "off" };
+    let live = st
+        .available_mb
+        .map_or("unknown".to_string(), |m| format!("{m} MB"));
+    format!(
+        "host: {} MB ({}), {} CPUs\n\
+         browser memory: {}/{} MB used, live free {live} (reserve {} MB)\n\
+         costs: {} MB per session, {} MB per extra tab\n\
+         sessions: {} ({} hibernated)\n\
+         queue: {}/{} waiting · page work {}/{} · launches {}/{}\n\
+         lean default: {} · private-network guard: {}",
+        st.capacity.memory_mb,
+        st.capacity.memory_source,
+        st.capacity.cpus,
+        st.used_mb,
+        st.budget_mb,
+        st.reserve_mb,
+        st.session_cost_mb,
+        st.tab_cost_mb,
+        st.sessions,
+        st.hibernated,
+        st.queued,
+        st.max_queue,
+        st.active,
+        st.max_active,
+        st.launching,
+        st.max_launches,
+        on(st.lean_default),
+        on(st.private_network_guard),
+    )
 }
 
 #[cfg(test)]
@@ -99,7 +137,9 @@ mod tests {
         let text = snapshot_text(&s);
         assert!(text.starts_with("Page: T\n"));
         assert!(text.contains("@e1\tbutton \"Send application\""));
-        assert!(text.contains("## Search\n@e2\ttextbox \"Search\" [required] value=\"hello world\""));
+        assert!(
+            text.contains("## Search\n@e2\ttextbox \"Search\" [required] value=\"hello world\"")
+        );
         assert!(text.contains("+3 more interactive elements omitted"));
         assert!(!text.ends_with('\n'));
     }

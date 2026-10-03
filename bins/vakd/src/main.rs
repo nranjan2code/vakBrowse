@@ -64,6 +64,7 @@ async fn main() -> vakbrowse_core::Result<()> {
                 Policy {
                     url_allow_prefixes: allow_prefixes,
                     allow_file: allow_file || Policy::from_env().allow_file,
+                    ..Policy::from_env()
                 },
                 vakbrowse_server::PoolConfig {
                     max_sessions,
@@ -85,8 +86,7 @@ async fn serve(
     policy: Policy,
     pool: vakbrowse_server::PoolConfig,
 ) -> vakbrowse_core::Result<()> {
-    let manager =
-        Arc::new(SessionManager::with_policy(policy).with_pool(pool));
+    let manager = Arc::new(SessionManager::with_policy(policy).with_pool(pool));
     manager.spawn_reaper();
     let path = std::path::PathBuf::from(socket);
 

@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-__all__ = ["Session", "VakError", "__version__"]
+__all__ = ["Session", "VakBusy", "VakError", "__version__"]
 __version__ = "0.4.0"
 
 _CDL = None  # lazily loaded; see get_lib()
@@ -22,6 +22,11 @@ _CDL = None  # lazily loaded; see get_lib()
 
 class VakError(Exception):
     """An application-level error surfaced by the request handler."""
+
+
+class VakBusy(VakError):
+    """Capacity was exhausted (memory budget, CPU slots or the admission
+    queue). Nothing ran; retry later or close sessions. See ``status()``."""
 
 
 def _lib_name() -> str:
@@ -87,12 +92,18 @@ class Session:
         if "Error" in p:
             err = p["Error"]
             kind = next(iter(err))
-            raise VakError(f"{kind}: {err[kind]}")
+            cls = VakBusy if kind == "Busy" else VakError
+            raise cls(f"{kind}: {err[kind]}")
         return p
 
     # ---- convenience actions ----
     def sessions(self) -> list:
         return self._payload({"type": "list_sessions"})["Sessions"]
+
+    def status(self) -> dict:
+        """Host capacity and load: memory budget/use, live free memory,
+        queue depth, CPU slots, hibernated sessions."""
+        return self._payload({"type": "status"})["Status"]
 
     def open(
         self,
@@ -105,6 +116,7 @@ class Session:
         click_recovery: bool = False,
         profile: str | None = None,
         headed: bool = False,
+        lean: bool | None = None,
     ) -> tuple[str, str]:
         """Open a session. Returns (session_id, initial_url)."""
         opts: dict = {"headless": not headed}
@@ -122,6 +134,8 @@ class Session:
             opts["human_timing"] = True
         if click_recovery:
             opts["click_recovery"] = True
+        if lean is not None:
+            opts["lean"] = lean
         info = self._payload({"type": "open", "options": opts})["Opened"]
         return info["id"], info["url"]
 

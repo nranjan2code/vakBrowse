@@ -7,9 +7,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::State;
 #[cfg(feature = "playground")]
 use axum::extract::Path;
+use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::StatusCode;
 #[cfg(feature = "playground")]
@@ -167,6 +167,7 @@ pub fn build_router_with(manager: Arc<SessionManager>, security: SecurityConfig)
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/sessions", post(open_session).get(list_sessions))
+        .route("/status", get(status))
         .route("/sessions/{session}", axum::routing::delete(close_session))
         .route("/sessions/{session}/actions", post(dispatch_action))
         .route("/sessions/{session}/batch", post(dispatch_batch))
@@ -199,7 +200,9 @@ pub fn build_router_with(manager: Arc<SessionManager>, security: SecurityConfig)
 fn playground_dir() -> std::path::PathBuf {
     std::env::var("VAKBROWSE_PLAYGROUND_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../playground/static"))
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../playground/static")
+        })
 }
 
 /// Serve forever on `addr`. CDP (Chrome) is the only engine backend.
@@ -220,9 +223,10 @@ pub async fn serve(
     // Unlike the daemon (explicit --idle-timeout-secs), an HTTP service left
     // running would otherwise accumulate forgotten Chrome sessions forever.
     let manager = Arc::new(
-        SessionManager::with_policy(policy).with_pool(vakbrowse_server::PoolConfig::from_env(
-            Some(1800),
-        )),
+        // Idle sessions hibernate within minutes (memory freed, state kept);
+        // this only closes abandoned ones.
+        SessionManager::with_policy(policy)
+            .with_pool(vakbrowse_server::PoolConfig::from_env(Some(24 * 60 * 60))),
     );
     manager.spawn_reaper();
     let app = build_router_with(manager.clone(), security);
@@ -256,6 +260,8 @@ fn status_for(response: &Response) -> StatusCode {
             ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
             ServiceError::Policy(_) => StatusCode::FORBIDDEN,
             ServiceError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            // Capacity exhausted: the request was not run; retry later.
+            ServiceError::Busy(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServiceError::Http(_) => StatusCode::BAD_GATEWAY,
             // Browser/engine-level failures (browser crashed, launch failed)
             // are server-side and may warrant a client retry.
@@ -290,6 +296,10 @@ async fn open_session(
 ) -> impl IntoResponse {
     let response = state.manager.handle(Request::Open { options }).await;
     response_to_http(response)
+}
+
+async fn status(State(state): State<ApiState>) -> impl IntoResponse {
+    response_to_http(state.manager.handle(Request::Status).await)
 }
 
 async fn list_sessions(State(state): State<ApiState>) -> impl IntoResponse {
@@ -398,30 +408,21 @@ async fn playground_root(_state: State<ApiState>) -> AxResponse {
 /// Serve a file from the playground build output directory on disk.
 /// Falls back to `index.html` for SPA routing if the file is not found.
 #[cfg(feature = "playground")]
-async fn playground_static(
-    _state: State<ApiState>,
-    Path(relative): Path<String>,
-) -> AxResponse {
+async fn playground_static(_state: State<ApiState>, Path(relative): Path<String>) -> AxResponse {
     let clean = relative.trim_start_matches("playground/");
     serve_static_file(clean)
 }
 
 /// Serve static assets requested from root, e.g. `/assets/...`
 #[cfg(feature = "playground")]
-async fn playground_assets(
-    _state: State<ApiState>,
-    Path(relative): Path<String>,
-) -> AxResponse {
+async fn playground_assets(_state: State<ApiState>, Path(relative): Path<String>) -> AxResponse {
     let clean = format!("assets/{}", relative);
     serve_static_file(&clean)
 }
 
 /// Fallback route: serve static file if it exists, otherwise SPA index.html
 #[cfg(feature = "playground")]
-async fn playground_fallback(
-    _state: State<ApiState>,
-    uri: axum::http::Uri,
-) -> AxResponse {
+async fn playground_fallback(_state: State<ApiState>, uri: axum::http::Uri) -> AxResponse {
     let path = uri.path().trim_start_matches('/');
     serve_static_file(path)
 }

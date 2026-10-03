@@ -39,6 +39,20 @@ pub struct LaunchOptions {
     /// handler already did something (add-to-cart, vote, delete) would run it
     /// up to three times. Enable only for known click-blocking sites.
     pub click_recovery: bool,
+    /// Lean rendering for small hosts: no images, no web fonts, no autoplay.
+    /// Text, layout, the a11y tree and `extract` are unaffected; screenshots
+    /// show image placeholders.
+    pub lean: bool,
+}
+
+/// What survives a hibernation (the browser process is shut down to free
+/// memory and relaunched on next use): tab ids and URLs, the active tab and
+/// every cookie. In-page JS state, form input and element refs do not.
+#[derive(Debug, Clone, Default)]
+pub struct SessionState {
+    pub tabs: Vec<TabInfo>,
+    pub active: Option<TabId>,
+    pub cookies: Vec<Cookie>,
 }
 
 impl Default for LaunchOptions {
@@ -53,6 +67,7 @@ impl Default for LaunchOptions {
             proxy_server: None,
             human_timing: false,
             click_recovery: false,
+            lean: false,
         }
     }
 }
@@ -146,6 +161,16 @@ pub trait PageOps: Send {
     }
     /// Current page HTML source (`document.documentElement.outerHTML`).
     async fn source(&self) -> Result<String>;
+
+    /// Capture what a hibernated session needs to be rebuilt.
+    async fn export_state(&mut self) -> Result<SessionState> {
+        Err(VakError::Unsupported("export_state".into()))
+    }
+
+    /// Rebuild a captured session on this freshly launched browser.
+    async fn import_state(&mut self, _state: &SessionState) -> Result<()> {
+        Err(VakError::Unsupported("import_state".into()))
+    }
     /// List completed downloads in the session's download directory.
     async fn downloads(&mut self) -> Result<Vec<DownloadInfo>> {
         Err(VakError::Unsupported(

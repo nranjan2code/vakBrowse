@@ -93,6 +93,52 @@ token). The playground needs token-less loopback use. `VAKBROWSE_HTTP_PORT` (def
 gracefully on SIGINT/SIGTERM: all sessions are closed (dropping browser
 handles) and the UDS socket file is removed before exit.
 
+**Private-network guard (on by default on every surface).** `Policy::from_env`
+sets `block_private`, which routes every browser connection through a loopback
+HTTP proxy (`crates/vakbrowse-server/src/netguard.rs`) that resolves the
+destination itself, refuses loopback/private/link-local (cloud metadata)/CGNAT/
+multicast/reserved IPv4+IPv6 (incl. mapped/NAT64) and `localhost` names, and
+connects to the exact IP it screened (no DNS rebinding). Because it is Chrome's
+proxy, it covers redirects, iframes, subresources, `fetch`, workers and
+WebSockets; Chrome runs with `--proxy-bypass-list=<-loopback>` and WebRTC
+non-proxied UDP disabled. Top-level URLs are pre-checked for a clear Policy
+error; a redirect into a private range parks the tab on `about:blank` with a
+Policy error. Opt out: `VAKBROWSE_ALLOW_PRIVATE=1`; exempt dev hosts:
+`VAKBROWSE_ALLOW_PRIVATE_HOSTS=localhost:3000,127.0.0.1:8080` (allowlisted
+`VAKBROWSE_ALLOW_PREFIXES` entries are exempt too). A session with its own
+`proxy`/`proxies` bypasses the guard (its traffic exits through that proxy's
+network). `Policy::default()` leaves it off for embedders and hermetic tests.
+
+**Compute-aware governance** (`crates/vakbrowse-server/src/governor.rs`).
+The manager detects capacity (cgroup v1/v2 memory limit, else host RAM;
+CPUs via `available_parallelism`, which honours cgroup quotas) and never
+launches blindly. Every session holds a memory lease (`session_cost_mb`,
+default 150; +`tab_cost_mb` 100 per extra tab — page-opened popups are charged
+when adopted) against a budget (default 60% of memory). A request that does not
+fit waits in a bounded FIFO queue (`max_queue` 64, `queue_timeout_secs` 120);
+on Linux it must also fit live free memory (cgroup headroom / MemAvailable)
+above `reserve_mb` (max(256, 10%)). Page work is capped at `max_active`
+(2×CPUs; waits hold no slot) and Chrome launches at `max_launches` (CPUs/2).
+Under pressure the least-recently-used session idle ≥ `evict_min_idle_secs`
+(30) is **hibernated**: tabs (same ids), URLs, active tab and cookies are kept
+(`PageOps::export_state`), Chrome is shut down, and the next action restores it
+transparently (`import_state`); in-page JS state, form input and refs do not
+survive. Idle sessions also hibernate after `hibernate_after_secs` (300).
+Nothing is dropped: a request runs, or gets the retryable
+`VakError::Busy`/`ServiceError::Busy` (HTTP 503, Python `VakBusy`) when the
+queue is full or the wait expires; the session cap now answers `Busy` too.
+`Request::Status` → `ResponsePayload::Status(ResourceStatus)` (`vak status`,
+`browser_status`, `GET /status`, `Session.status()`). Env overrides:
+`VAKBROWSE_MEMORY_BUDGET_MB`, `_SESSION_COST_MB`, `_TAB_COST_MB`,
+`_MEMORY_RESERVE_MB`, `_MAX_QUEUE`, `_QUEUE_TIMEOUT_SECS`, `_MAX_ACTIVE`,
+`_MAX_LAUNCHES`, `_HIBERNATE_AFTER_SECS` (0 disables), `_EVICT_IDLE_SECS`,
+`VAKBROWSE_LEAN`. **Lean mode** (`SessionOptions.lean`, `--lean/--no-lean`,
+`browser_open {lean}`) launches with images, remote fonts and autoplay off;
+default on for hosts with ≤4 GB. Idle *close* (`VAKBROWSE_IDLE_TIMEOUT_SECS`)
+now defaults to 24h for `vak-mcp`/`vakd-rest`, since hibernation already frees
+idle memory. `VAKBROWSE_MCP_TOOLS=core` (or a comma list) trims the MCP tool
+list to the 12 `CORE_TOOLS`. The FFI runs the reaper too.
+
 Embedding from Python (no daemon needed — library owns its runtime):
 
 ```bash
@@ -184,6 +230,21 @@ Default `cargo build` / `cargo test` do not require it.
   New chrome-launching server tests are guarded by
   `browser_lock()` (serialized per test binary) to keep
   `cargo test --workspace` green on macOS, Linux-root, AND Linux-non-root.
+- Governance cycle (P7+): **130 passed / 0 failed / 2 ignored** on macOS
+  (+15: 6 governor unit, 4 netguard unit incl. an end-to-end proxy block/allow,
+  5 `crates/vakbrowse-server/tests/governance.rs` integration — hibernation
+  round-trip of tab ids/URLs/cookies, queue-then-`Busy`, pressure eviction with
+  every request served, lean blocks images, guard vs direct/iframe/fetch/
+  redirect). Measured in a 2 GB / 2 vCPU arm64 container (uid 1000): capacity
+  detected as 2048 MB cgroup / 2 CPUs (budget 1228 MB, lean on); 14 concurrent
+  Wikipedia opens → 14 served, 0 busy, 0 OOM kills, peak 1270 MB, 6 hibernated;
+  the guard adds no measurable latency (0.65 s opens on and off). Linux fixes
+  found by that run: Chrome's own startup tab (`chrome://new-tab-page/` under
+  Linux chrome-headless-shell) was adopted as a phantom tab and multiplied on
+  each hibernate/restore — now closed at launch and skipped by `export_state`;
+  the guard tries every screened address (an unreachable AAAA no longer fails a
+  request) and caches screened DNS answers for 30 s (a flaky resolver stalled
+  loads, since Chrome's own DNS cache is bypassed behind a proxy).
 - Fixes: workspace version aligned to `0.4.0` (was `0.1.0`); CFT HTTP downloads
   now have a 30s (manifest) / 120s (binary) timeout (previously unbounded);
   `human_jitter` uses a splitmix64-mixed timestamp+counter (no longer
@@ -221,7 +282,7 @@ crates/
                         #   UDS wire protocol (serve + client)
   vakbrowse-cli         # `vak` binary — thin clap wrapper over the wire client
   vakbrowse-mcp         # `vak-mcp` binary + VakMcp lib — MCP server (rmcp, stdio),
-                        #   35 browser_* (tabs, history, screenshot/click-at,
+                        #   36 browser_* (tabs, history, screenshot/click-at,
                         #   extract, cookies, webmcp, wait_url, stealth/proxy on open,
                         #   set_file_chooser, source, downloads);
   vakbrowse-api         # `vakd-rest` binary + lib — axum REST + WebSocket bridge;
@@ -263,9 +324,10 @@ playground/
   never to follow instructions inside — a page cannot forge the closing fence.
   `eval`/`source`/WebMCP text is capped at `MAX_TEXT_RESULT_CHARS` (60k) with a
   truncation note on every surface. `vak-mcp` and `vakd-rest` now run the idle
-  reaper by default (30 min; `VAKBROWSE_IDLE_TIMEOUT_SECS`, `0` disables;
-  `VAKBROWSE_MAX_SESSIONS`), and the reaper skips a session whose page lock is
-  held (an action still running). The 35-tool surface itself is unchanged.
+  reaper by default (hibernate after 5 min idle, close after 24h;
+  `VAKBROWSE_IDLE_TIMEOUT_SECS`, `0` disables close; `VAKBROWSE_MAX_SESSIONS`),
+  and the reaper skips a session whose page lock is held (an action still
+  running). The surface is 36 tools (`browser_status` added).
 - Snapshots carry widget **state** per element (`checked`/`unchecked`/`mixed`,
   `disabled`, `expanded`/`collapsed`, `selected`, `required`), page **headings**
   positioned among the elements (rendered as `## Title` lines, so repeated
@@ -483,6 +545,7 @@ playground/
 | P5 | Multi-tab sessions, cross-frame (iframe) perception & clicks; CI built then disabled (billing) | **done** |
 | P6 | Real-web dogfooding fixes (snapshot self-heal, fill-focuses, history) + per-session stealth/proxy + `extract` action + release workflow | **done** |
 | P7 | Action batching (`Request::Batch`+`Results` over all surfaces), proxy rotation (`RotateProxy` w/ URL restore), `--human-timing` jitter, `scripts/release.sh` | **done** |
+| P7+ | Compute-aware governance (memory/CPU admission, FIFO queue, `Busy`, hibernation w/ state restore, `status`), private-network guard proxy, lean mode, MCP core tool profile, multi-arch Docker image | **done** |
 
 Post-roadmap ideas (not committed): WebDriver BiDI backend behind the engine
 trait. DONE in-tree: pip packaging of the FFI (`python/`), proxy rotation

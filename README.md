@@ -28,13 +28,27 @@ capability once, all five surfaces get it.
 
 ## Status
 
-**Roadmap P0–P7 complete.**
+**Roadmap P0–P7 complete, plus compute-aware governance.**
+
+- **Runs within its means (P7+)** — detects the host's memory (incl. container
+  cgroup limits) and CPUs; sessions and tabs are admitted against a memory
+  budget and live free memory, page work and Chrome launches are capped by
+  CPU count, and anything that doesn't fit waits in a fair FIFO queue. Idle
+  sessions are **hibernated** (tabs, URLs, cookies kept; browser freed) and
+  restored on their next action. Nothing is silently dropped: a request runs
+  or gets a retryable `busy`. `vak status` / `browser_status` /
+  `GET /status` show capacity and load. Lean mode (no images/fonts/autoplay)
+  is on by default for hosts with ≤4 GB. A **private-network guard** (on by
+  default) routes all browser traffic through a loopback proxy that refuses
+  internal addresses — including via redirects, iframes, `fetch` and DNS
+  rebinding — with `VAKBROWSE_ALLOW_PRIVATE_HOSTS` for local dev servers.
+  The Docker image builds for linux/amd64 and linux/arm64.
 
 - **Core (P0–P1)** — chrome-headless-shell download/pin/cache; a11y snapshots
   with stable `@eN` refs; trusted clicks, framework-safe fills, select/key/
   scroll/wait; cookies + persistent profiles.
 - **Surfaces (P2–P3)** — `vakd` daemon over UDS; `vak` CLI; `vak-mcp`
-  (**35 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
+  (**36 tools**, verified MCP handshake); `vakd-rest` REST + WebSocket;
   `libvakbrowse_ffi` cdylib (Python ctypes drives full flows in-process);
   Docker image with the pinned engine baked in.
 - **Agent-grade capabilities (P4)** — stealth fingerprints + humanized

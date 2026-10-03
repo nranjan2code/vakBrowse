@@ -2597,6 +2597,7 @@ dependencies = [
  "base64 0.23.1",
  "dirs",
  "futures",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

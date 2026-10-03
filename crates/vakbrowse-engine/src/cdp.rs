@@ -6,7 +6,9 @@
 //! frames), prefixing AX node ids with the frame id so refs stay unique.
 
 use crate::cft::{self, CftConfig};
-use crate::{ClickResult, EngineLauncher, LaunchOptions, Navigated, PageOps, validate_url};
+use crate::{
+    ClickResult, EngineLauncher, LaunchOptions, Navigated, PageOps, SessionState, validate_url,
+};
 use chromiumoxide::Page;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::accessibility::{
@@ -180,6 +182,14 @@ fn is_sandbox_launch_failure(msg: &str) -> bool {
 /// Default hardening flags applied to every launch. Deliberately NOT
 /// including `--no-sandbox`; sandboxing stays on and is the caller's
 /// environment responsibility.
+/// Lean rendering: images, web fonts and autoplaying media are the bulk of a
+/// page's memory and CPU, and agents read text and the a11y tree, not pixels.
+const LEAN_ARGS: &[&str] = &[
+    "--blink-settings=imagesEnabled=false",
+    "--disable-remote-fonts",
+    "--autoplay-policy=user-gesture-required",
+];
+
 const DEFAULT_ARGS: &[&str] = &[
     "--no-first-run",
     "--no-default-browser-check",
@@ -289,6 +299,10 @@ impl EngineLauncher for CdpLauncher {
             args.push(format!("--proxy-server={proxy}"));
         }
 
+        if options.lean {
+            args.extend(LEAN_ARGS.iter().map(|a| a.to_string()));
+        }
+
         for arg in &args {
             builder = push_arg(builder, arg);
         }
@@ -356,6 +370,16 @@ impl EngineLauncher for CdpLauncher {
         });
 
         let page = browser.new_page("about:blank").await.map_err(proto_err)?;
+        // Chrome may open its own startup tab (chrome://new-tab-page/ under
+        // Linux chrome-headless-shell); left alone it is adopted as a phantom
+        // tab that costs memory and multiplies across hibernate/restore.
+        if let Ok(pages) = browser.pages().await {
+            for p in pages {
+                if p.target_id() != page.target_id() {
+                    let _ = p.close().await;
+                }
+            }
+        }
 
         if let Some(stealth) = &options.stealth {
             apply_stealth(&page, stealth).await?;
@@ -1593,6 +1617,78 @@ impl PageOps for CdpSession {
             list.insert(0, active);
         }
         Ok(list)
+    }
+
+    async fn export_state(&mut self) -> Result<SessionState> {
+        // Browser-internal pages are never agent-opened (validate_url refuses
+        // chrome:), so they are not worth rebuilding.
+        let tabs: Vec<TabInfo> = self
+            .tabs()
+            .await?
+            .into_iter()
+            .filter(|t| !t.url.starts_with("chrome://") && !t.url.starts_with("chrome-error://"))
+            .collect();
+        Ok(SessionState {
+            tabs,
+            active: Some(self.active.clone()),
+            cookies: self.cookies().await?,
+        })
+    }
+
+    async fn import_state(&mut self, state: &SessionState) -> Result<()> {
+        for c in &state.cookies {
+            let input = CookieInput {
+                name: c.name.clone(),
+                value: c.value.clone(),
+                domain: c.domain.clone(),
+                path: c.path.clone(),
+                secure: c.secure,
+                http_only: c.http_only,
+                same_site: c.same_site.clone(),
+                expires: c.expires,
+            };
+            if let Err(e) = self.set_cookie(&input).await {
+                tracing::warn!(cookie = %c.name, error = %e, "cookie not restored");
+            }
+        }
+        // Restore under the original ids so tab ids an agent holds stay valid.
+        let mut restored: HashMap<TabId, TabState> = HashMap::new();
+        let mut max_n = 1;
+        for (i, tab) in state.tabs.iter().enumerate() {
+            let fresh = if i == 0 {
+                self.active.clone()
+            } else {
+                self.new_tab(None).await?.id
+            };
+            let mut ts = self
+                .tabs
+                .remove(&fresh)
+                .ok_or_else(|| VakError::Engine("restore: tab vanished".into()))?;
+            if tab.url != "about:blank" && !tab.url.is_empty() {
+                match ts.page.goto(tab.url.as_str()).await {
+                    Ok(_) => ts.current_url = tab.url.clone(),
+                    Err(e) => tracing::warn!(url = %tab.url, error = %e, "tab not restored"),
+                }
+            }
+            if let Some(n) = tab.id.0.strip_prefix('t').and_then(|n| n.parse::<u64>().ok()) {
+                max_n = max_n.max(n);
+            }
+            restored.insert(tab.id.clone(), ts);
+        }
+        if restored.is_empty() {
+            return Ok(());
+        }
+        // Any tab the fresh browser had beyond the restored set is dropped.
+        self.tabs = restored;
+        self.next_tab = max_n + 1;
+        self.active = state
+            .active
+            .clone()
+            .filter(|a| self.tabs.contains_key(a))
+            .or_else(|| self.tabs.keys().next().cloned())
+            .unwrap_or_else(|| TabId("t1".into()));
+        self.pointer = (0.0, 0.0);
+        Ok(())
     }
 
     async fn new_tab(&mut self, url: Option<&str>) -> Result<TabInfo> {

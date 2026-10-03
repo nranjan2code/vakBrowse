@@ -26,8 +26,8 @@ async fn max_sessions_cap_is_enforced() {
         .await
         .unwrap();
     assert!(
-        matches!(resp, ResponsePayload::Error(ServiceError::Policy(_))),
-        "expected cap/policy error, got {resp:?}"
+        matches!(resp, ResponsePayload::Error(ServiceError::Busy(_))),
+        "expected a retryable busy error at the cap, got {resp:?}"
     );
 
     // Closing frees a slot.
@@ -127,7 +127,7 @@ async fn concurrent_opens_cannot_exceed_cap() {
     for t in tasks {
         match t.await.unwrap() {
             ResponsePayload::Opened(_) => opened += 1,
-            ResponsePayload::Error(ServiceError::Policy(_)) => {}
+            ResponsePayload::Error(ServiceError::Busy(_)) => {}
             other => panic!("unexpected {other:?}"),
         }
     }

@@ -50,6 +50,8 @@ fn render_extract(ex: &Extracted) -> String {
     text
 }
 
+pub mod governor;
+pub mod netguard;
 pub mod render;
 #[cfg(unix)]
 pub mod uds;
@@ -65,7 +67,12 @@ use vakbrowse_core::{
     Cookie, CookieInput, DEFAULT_EXTRACT_CHARS, ElementRef, ExtractWindow, Extracted, ProfileId,
     Result, SessionId, Snapshot, TabId, TabInfo, VakError, WebMcpTool,
 };
-use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
+use vakbrowse_engine::{
+    CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps, SessionState,
+};
+
+use governor::{Governor, Lease, ResourceStatus, Take};
+use netguard::{GuardRules, NetGuard};
 
 /// Options for opening a new session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +108,10 @@ pub struct SessionOptions {
     /// element's handlers — see `LaunchOptions::click_recovery`).
     #[serde(default)]
     pub click_recovery: bool,
+    /// Lean rendering (no images, web fonts or autoplay). None = the
+    /// governor's default, which is on for hosts with 4 GB or less.
+    #[serde(default)]
+    pub lean: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -118,6 +129,7 @@ impl Default for SessionOptions {
             proxies: Vec::new(),
             human_timing: false,
             click_recovery: false,
+            lean: None,
         }
     }
 }
@@ -127,6 +139,10 @@ pub struct SessionInfo {
     pub id: SessionId,
     pub profile: Option<ProfileId>,
     pub url: String,
+    /// The browser was shut down to free memory; the next action restores
+    /// its tabs, URLs and cookies transparently.
+    #[serde(default)]
+    pub hibernated: bool,
 }
 
 /// One agent-issued browser action. Serde-tagged so it doubles as wire JSON.
@@ -316,6 +332,8 @@ pub enum Request {
         session: SessionId,
         actions: Vec<Action>,
     },
+    /// Capacity, budget, queue and slot usage: what the host can take now.
+    Status,
 }
 
 /// Wire-level classification of an application error, preserving the
@@ -332,6 +350,8 @@ pub enum ServiceError {
     Unsupported(String),
     Timeout(String),
     Io(String),
+    /// Retryable: capacity was exhausted and the request was not run.
+    Busy(String),
 }
 
 impl std::fmt::Display for ServiceError {
@@ -346,6 +366,7 @@ impl std::fmt::Display for ServiceError {
             ServiceError::Unsupported(m) => ("unsupported", m),
             ServiceError::Timeout(m) => ("timeout", m),
             ServiceError::Io(m) => ("io", m),
+            ServiceError::Busy(m) => ("busy", m),
         };
         write!(f, "{kind}: {msg}")
     }
@@ -365,6 +386,7 @@ impl From<VakError> for ServiceError {
             VakError::Io(e) => ServiceError::Io(e.to_string()),
             VakError::Unsupported(s) => ServiceError::Unsupported(s),
             VakError::Timeout(s) => ServiceError::Timeout(s),
+            VakError::Busy(s) => ServiceError::Busy(s),
         }
     }
 }
@@ -380,6 +402,7 @@ pub enum ResponsePayload {
     /// `Request::Batch`: one result per action, in order (fail-fast on first
     /// error — the whole batch surfaces that action's `ServiceError`).
     Results(Vec<ActionResult>),
+    Status(ResourceStatus),
     /// Application-level error (the request was well-formed but the action
     /// failed). Transport-level failures (panic in handler, encode errors)
     /// stay on the `Err(String)` arm of `Response`.
@@ -406,6 +429,15 @@ pub struct Policy {
     /// [`Policy::from_env`], which turns this OFF unless explicitly enabled.
     #[serde(default = "default_true")]
     pub allow_file: bool,
+    /// Route every browser connection through the private-network guard
+    /// (blocks loopback/private/link-local/metadata addresses, incl. via
+    /// redirects, iframes and subresources). Off in the library default for
+    /// embedders and hermetic tests; ON for every surface via `from_env`.
+    #[serde(default)]
+    pub block_private: bool,
+    /// Private hosts the guard still admits (`host`, `host:port`, URL).
+    #[serde(default)]
+    pub private_allow: Vec<String>,
 }
 
 impl Default for Policy {
@@ -413,8 +445,20 @@ impl Default for Policy {
         Self {
             url_allow_prefixes: Vec::new(),
             allow_file: true,
+            block_private: false,
+            private_allow: Vec::new(),
         }
     }
+}
+
+fn env_list(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn env_flag(name: &str) -> bool {
@@ -429,15 +473,19 @@ impl Policy {
     /// (comma-separated) and `VAKBROWSE_ALLOW_FILE=1` to opt back in to `file:`.
     pub fn from_env() -> Self {
         Self {
-            url_allow_prefixes: std::env::var("VAKBROWSE_ALLOW_PREFIXES")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect(),
+            url_allow_prefixes: env_list("VAKBROWSE_ALLOW_PREFIXES"),
             allow_file: env_flag("VAKBROWSE_ALLOW_FILE"),
+            block_private: !env_flag("VAKBROWSE_ALLOW_PRIVATE"),
+            private_allow: env_list("VAKBROWSE_ALLOW_PRIVATE_HOSTS"),
         }
+    }
+
+    /// Guard exemptions: explicit private hosts plus every allowlisted
+    /// prefix (an operator who allowlists `http://localhost:3000` means it).
+    fn guard_rules(&self) -> GuardRules {
+        let mut entries = self.private_allow.clone();
+        entries.extend(self.url_allow_prefixes.iter().cloned());
+        GuardRules::new(&entries)
     }
 
     fn restricted(&self) -> bool {
@@ -492,9 +540,7 @@ fn prefix_matches(prefix: &str, url: &url::Url, raw: &str) -> bool {
                 return false;
             }
             let base = p.path().trim_end_matches('/');
-            base.is_empty()
-                || url.path() == base
-                || url.path().starts_with(&format!("{base}/"))
+            base.is_empty() || url.path() == base || url.path().starts_with(&format!("{base}/"))
         }
         _ => raw.starts_with(prefix),
     }
@@ -517,10 +563,19 @@ pub async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+/// A session's browser: `None` while hibernated (state is in `dormant`).
+type PageSlot = Option<Box<dyn PageOps>>;
+
 struct ManagedSession {
     id: SessionId,
     profile: Option<ProfileId>,
-    page: Arc<Mutex<Box<dyn PageOps>>>,
+    page: Arc<Mutex<PageSlot>>,
+    /// Memory this session holds in the governor (base + extra tabs).
+    lease: Option<Lease>,
+    /// Tabs beyond the first, as charged in `lease`.
+    extra_tabs: usize,
+    /// Set while hibernated: what the next action restores.
+    dormant: Option<SessionState>,
     current_url: String,
     last_active: std::time::Instant,
     /// Original launch options (re-used on `RotateProxy`, only the proxy
@@ -594,6 +649,11 @@ pub struct SessionManager {
     /// session (Chrome takes seconds to launch). Counted against the cap so
     /// concurrent opens can't all slip under it.
     opening: AtomicUsize,
+    /// Compute-aware admission: memory leases, FIFO queue, CPU slots.
+    gov: Arc<Governor>,
+    /// Private-network guard proxy, started on first launch when the policy
+    /// asks for it.
+    guard: tokio::sync::OnceCell<Arc<NetGuard>>,
 }
 
 /// Holds one slot of the session cap while a browser is launching.
@@ -638,6 +698,236 @@ impl SessionManager {
             profiles_root: default_profiles_root(),
             next_id: Mutex::new(0),
             opening: AtomicUsize::new(0),
+            gov: Governor::from_env(),
+            guard: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Replace the resource governor (tests, embedders with fixed budgets).
+    pub fn with_governor(mut self, gov: Arc<Governor>) -> Self {
+        self.gov = gov;
+        self
+    }
+
+    pub fn governor(&self) -> &Arc<Governor> {
+        &self.gov
+    }
+
+    pub async fn status(&self) -> ResourceStatus {
+        let (n, dormant) = {
+            let map = self.sessions.lock().await;
+            (
+                map.len(),
+                map.values().filter(|s| s.dormant.is_some()).count(),
+            )
+        };
+        self.gov.status(n, dormant, self.policy.block_private)
+    }
+
+    async fn net_guard(&self) -> Result<Option<Arc<NetGuard>>> {
+        if !self.policy.block_private {
+            return Ok(None);
+        }
+        let rules = self.policy.guard_rules();
+        let g = self
+            .guard
+            .get_or_try_init(|| async move { NetGuard::start(rules).await.map(Arc::new) })
+            .await?;
+        Ok(Some(g.clone()))
+    }
+
+    /// Refuse a top-level URL whose host is private before the browser
+    /// tries it (the proxy enforces the same rule for everything else).
+    async fn guard_check(&self, url: &str) -> Result<()> {
+        if let Some(g) = self.net_guard().await? {
+            g.check_url(url)
+                .await
+                .map_err(|why| VakError::Policy(format!("private network blocked: {why}")))?;
+        }
+        Ok(())
+    }
+
+    /// A navigation the guard refused surfaces from Chrome as a generic
+    /// network error; report it as the policy decision it was.
+    fn explain(&self, e: VakError) -> VakError {
+        if matches!(
+            e,
+            VakError::Protocol(_) | VakError::Engine(_) | VakError::Http(_)
+        ) && let Some(g) = self.guard.get()
+            && let Some(why) = g.recent_block(std::time::Duration::from_secs(5))
+        {
+            return VakError::Policy(format!("private network blocked: {why}"));
+        }
+        e
+    }
+
+    /// Wait (FIFO, bounded) for a CPU-bound slot.
+    async fn slot<'a>(
+        &self,
+        sem: &'a tokio::sync::Semaphore,
+        what: &str,
+    ) -> Result<tokio::sync::SemaphorePermit<'a>> {
+        match tokio::time::timeout(self.gov.queue_timeout(), sem.acquire()).await {
+            Ok(Ok(p)) => Ok(p),
+            Ok(Err(_)) => Err(VakError::Engine("governor shut down".into())),
+            Err(_) => Err(VakError::Busy(format!(
+                "waited {}s for a free {what} slot (all in use); retry later",
+                self.gov.cfg.queue_timeout_secs
+            ))),
+        }
+    }
+
+    /// Wait in the admission queue until `mb` fits the memory budget and
+    /// the live free memory, hibernating idle sessions to make room.
+    async fn admit(&self, mb: u64, exclude: Option<&SessionId>) -> Result<Lease> {
+        let ticket = self.gov.enqueue().map_err(VakError::Busy)?;
+        let deadline = tokio::time::Instant::now() + self.gov.queue_timeout();
+        loop {
+            let notified = self.gov.notified();
+            match self.gov.try_take(&ticket, mb) {
+                Take::Granted(lease) => return Ok(lease),
+                Take::NoRoom => {
+                    if self.hibernate_one(exclude).await {
+                        continue;
+                    }
+                }
+                Take::NotYourTurn => {}
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(VakError::Busy(format!(
+                    "waited {}s for {mb} MB of browser memory (in use {}/{} MB, live free {}, {} queued); retry later or close sessions",
+                    self.gov.cfg.queue_timeout_secs,
+                    self.gov.used_mb(),
+                    self.gov.cfg.budget_mb,
+                    self.gov
+                        .live_available()
+                        .map_or("unknown".into(), |m| format!("{m} MB")),
+                    self.gov.queued()
+                )));
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            let _ = tokio::time::timeout(tick, notified).await;
+        }
+    }
+
+    /// Launch with the guard applied (unless the session has its own
+    /// proxy, where traffic leaves through that proxy's network) and inside
+    /// a launch slot.
+    async fn launch_browser(&self, opts: &LaunchOptions) -> Result<Box<dyn PageOps>> {
+        let mut opts = opts.clone();
+        if opts.proxy_server.is_none()
+            && let Some(g) = self.net_guard().await?
+        {
+            opts.proxy_server = Some(g.proxy_url());
+            opts.extra_args.extend(NetGuard::chrome_args());
+        }
+        let _launching = self.slot(&self.gov.launches, "browser launch").await?;
+        self.launcher.launch(&opts).await
+    }
+
+    /// Shut a session's browser down to free memory, keeping what is needed
+    /// to rebuild it (tabs, URLs, cookies). Skips a session mid-action.
+    pub async fn hibernate(&self, id: &SessionId) -> bool {
+        let Some(page_arc) = self.sessions.lock().await.get(id).map(|s| s.page.clone()) else {
+            return false;
+        };
+        let Ok(mut slot) = page_arc.try_lock() else {
+            return false;
+        };
+        let Some(mut page) = slot.take() else {
+            return false;
+        };
+        match page.export_state().await {
+            Ok(state) => {
+                drop(page);
+                if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                    s.dormant = Some(state);
+                    s.lease = None;
+                    s.extra_tabs = 0;
+                }
+                tracing::info!(%id, "session hibernated");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(%id, error = %e, "hibernate failed; session kept live");
+                *slot = Some(page);
+                false
+            }
+        }
+    }
+
+    /// Free memory for a waiting request: hibernate the least recently used
+    /// idle session.
+    async fn hibernate_one(&self, exclude: Option<&SessionId>) -> bool {
+        let min_idle = std::time::Duration::from_secs(self.gov.cfg.evict_min_idle_secs);
+        let mut candidates: Vec<(std::time::Instant, SessionId)> = {
+            let map = self.sessions.lock().await;
+            map.values()
+                .filter(|s| {
+                    s.dormant.is_none()
+                        && Some(&s.id) != exclude
+                        && s.last_active.elapsed() >= min_idle
+                })
+                .map(|s| (s.last_active, s.id.clone()))
+                .collect()
+        };
+        candidates.sort();
+        for (_, id) in candidates {
+            if self.hibernate(&id).await {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Bring a hibernated session back (called with its page lock held).
+    async fn restore(&self, id: &SessionId, slot: &mut PageSlot) -> Result<()> {
+        let (state, opts) = {
+            let map = self.sessions.lock().await;
+            let s = map
+                .get(id)
+                .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?;
+            (s.dormant.clone(), s.opts.clone())
+        };
+        let state =
+            state.ok_or_else(|| VakError::Engine(format!("session {id} has no browser")))?;
+        let extra = state.tabs.len().saturating_sub(1);
+        let cost = self.gov.cfg.session_cost_mb + self.gov.cfg.tab_cost_mb * extra as u64;
+        let lease = self.admit(cost, Some(id)).await?;
+        let mut page = self.launch_browser(&opts).await?;
+        page.import_state(&state).await?;
+        *slot = Some(page);
+        if let Some(s) = self.sessions.lock().await.get_mut(id) {
+            s.dormant = None;
+            s.lease = Some(lease);
+            s.extra_tabs = extra;
+        }
+        tracing::info!(%id, tabs = state.tabs.len(), "session restored");
+        Ok(())
+    }
+
+    /// Keep a session's lease in step with its tab count. `admitted` is a
+    /// lease already queued for (an explicit new tab); tabs the page opened
+    /// itself are charged without waiting — they already exist.
+    async fn charge_tabs(&self, id: &SessionId, extra: usize, admitted: Option<Lease>) {
+        let cost = self.gov.cfg.tab_cost_mb;
+        let mut map = self.sessions.lock().await;
+        let Some(s) = map.get_mut(id) else {
+            return;
+        };
+        let lease = s.lease.get_or_insert_with(|| self.gov.empty_lease());
+        let mut admitted = admitted;
+        while s.extra_tabs < extra {
+            match admitted.take() {
+                Some(l) => lease.absorb(l),
+                None => lease.absorb(self.gov.force(cost)),
+            }
+            s.extra_tabs += 1;
+        }
+        while s.extra_tabs > extra {
+            lease.shrink(cost);
+            s.extra_tabs -= 1;
         }
     }
 
@@ -659,24 +949,40 @@ impl SessionManager {
             let tick = std::time::Duration::from_secs(5);
             loop {
                 tokio::time::sleep(tick).await;
-                let Some(timeout) = this.pool.idle_timeout_secs else {
-                    continue;
-                };
-                let expired: Vec<SessionId> = {
+                let close_after = this
+                    .pool
+                    .idle_timeout_secs
+                    .map(std::time::Duration::from_secs);
+                let sleep_after = this
+                    .gov
+                    .cfg
+                    .hibernate_after_secs
+                    .map(std::time::Duration::from_secs);
+                let (expired, sleepy): (Vec<SessionId>, Vec<SessionId>) = {
                     let map = this.sessions.lock().await;
-                    map.values()
-                        .filter(|s| {
-                            s.last_active.elapsed() > std::time::Duration::from_secs(timeout)
-                                // A locked page means an action is still running
-                                // (last_active is only stamped when it starts).
-                                && s.page.try_lock().is_ok()
-                        })
-                        .map(|s| s.id.clone())
-                        .collect()
+                    let mut expired = Vec::new();
+                    let mut sleepy = Vec::new();
+                    for s in map.values() {
+                        let idle = s.last_active.elapsed();
+                        // A locked page means an action is still running
+                        // (last_active is only stamped when it starts).
+                        if s.page.try_lock().is_err() {
+                            continue;
+                        }
+                        if close_after.is_some_and(|t| idle > t) {
+                            expired.push(s.id.clone());
+                        } else if s.dormant.is_none() && sleep_after.is_some_and(|t| idle > t) {
+                            sleepy.push(s.id.clone());
+                        }
+                    }
+                    (expired, sleepy)
                 };
                 for id in expired {
                     tracing::info!(%id, "reaping idle session");
                     let _ = this.close(&id).await;
+                }
+                for id in sleepy {
+                    this.hibernate(&id).await;
                 }
             }
         })
@@ -714,14 +1020,19 @@ impl SessionManager {
         &self,
         options: SessionOptions,
     ) -> Result<(SessionInfo, std::option::Option<Navigated>)> {
+        let own_proxy = launch_proxy(&options).is_some();
         if let Some(url) = &options.url {
             self.policy.check(url)?;
+            if !own_proxy {
+                self.guard_check(url).await?;
+            }
         }
+        let lease = self.admit(self.gov.cfg.session_cost_mb, None).await?;
         let mut reservation = {
             let map = self.sessions.lock().await;
             if map.len() + self.opening.load(Ordering::SeqCst) >= self.pool.max_sessions {
-                return Err(VakError::Policy(format!(
-                    "session cap reached ({})",
+                return Err(VakError::Busy(format!(
+                    "session cap reached ({}); close or wait for a session",
                     self.pool.max_sessions
                 )));
             }
@@ -740,6 +1051,7 @@ impl SessionManager {
             proxy_server: launch_proxy(&options),
             human_timing: options.human_timing,
             click_recovery: options.click_recovery,
+            lean: options.lean.unwrap_or(self.gov.cfg.lean_default),
             ..LaunchOptions::default()
         };
         if let Some(profile) = &options.profile {
@@ -760,13 +1072,16 @@ impl SessionManager {
         // CDP is the only engine backend. The launcher is fixed at
         // `SessionManager::new` time, so `SessionOptions` no longer carries a
         // `backend` field.
-        let page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
+        let page: Box<dyn PageOps> = self.launch_browser(&launch).await?;
         let id = self.next_session_id().await;
         let init_proxy_idx = INITIAL_PROXY_IDX;
         let mut managed = ManagedSession {
             id: id.clone(),
             profile: options.profile.clone(),
-            page: Arc::new(Mutex::new(page)),
+            page: Arc::new(Mutex::new(Some(page))),
+            lease: Some(lease),
+            extra_tabs: 0,
+            dormant: None,
             current_url: "about:blank".to_string(),
             last_active: std::time::Instant::now(),
             opts: launch,
@@ -777,8 +1092,12 @@ impl SessionManager {
         let navigated = match &options.url {
             Some(url) => {
                 self.policy.check(url)?;
+                let _working = self.slot(&self.gov.active, "page work").await?;
                 let mut guard = managed.page.lock().await;
-                let nav = guard.navigate(url).await?;
+                let page = guard
+                    .as_mut()
+                    .ok_or_else(|| VakError::Engine("browser missing after launch".into()))?;
+                let nav = page.navigate(url).await.map_err(|e| self.explain(e))?;
                 managed.current_url = nav.url.clone();
                 Some(nav)
             }
@@ -789,6 +1108,7 @@ impl SessionManager {
             id,
             profile: options.profile.clone(),
             url: managed.current_url.clone(),
+            hibernated: false,
         };
         {
             let mut map = self.sessions.lock().await;
@@ -831,6 +1151,7 @@ impl SessionManager {
                 id: s.id.clone(),
                 profile: s.profile.clone(),
                 url: s.current_url.clone(),
+                hibernated: s.dormant.is_some(),
             })
             .collect()
     }
@@ -868,17 +1189,25 @@ impl SessionManager {
         launch.proxy_server = Some(pool[next].clone());
 
         tracing::info!(session = %id, proxy = %pool[next], "rotating proxy (endpoint {next}/{n})");
-        let new_page: Box<dyn PageOps> = self.launcher.launch(&launch).await?;
-
-        // Wait for any in-flight action on this session, then swap the page.
-        // The old CdpSession drops here and its chrome is torn down.
+        // Wait for any in-flight action on this session first: a hibernated
+        // session just records the new endpoint for its next restore.
         let mut guard = page_arc.lock().await;
-        *guard = new_page;
+        if guard.is_none() {
+            if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                s.proxy_idx = next;
+                s.opts.proxy_server = Some(pool[next].clone());
+            }
+            return Ok(ActionResult::Flag { ok: true });
+        }
+        let new_page: Box<dyn PageOps> = self.launch_browser(&launch).await?;
+        // Swap the page; the old CdpSession drops and its chrome is torn down.
+        *guard = Some(new_page);
         let restored_url = {
             let mut map = self.sessions.lock().await;
             match map.get_mut(id) {
                 Some(s) => {
                     s.proxy_idx = next;
+                    s.opts.proxy_server = Some(pool[next].clone());
                     s.last_active = std::time::Instant::now();
                     s.current_url.clone()
                 }
@@ -893,7 +1222,10 @@ impl SessionManager {
         // open(); we re-check cheaply to keep the invariant honoured.
         if restored_url != "about:blank" {
             self.policy.check(&restored_url)?;
-            let nav = guard.navigate(&restored_url).await?;
+            let page = guard
+                .as_mut()
+                .ok_or_else(|| VakError::Engine("browser missing after rotation".into()))?;
+            let nav = page.navigate(&restored_url).await?;
             if let Some(s) = self.sessions.lock().await.get_mut(id) {
                 s.current_url = nav.url;
             }
@@ -912,14 +1244,16 @@ impl SessionManager {
             return self.rotate_proxy(id).await;
         }
 
-        let entry = {
+        let (page_arc, own_proxy) = {
             let map = self.sessions.lock().await;
             map.get(id)
-                .map(|s| (s.page.clone(), s.profile.clone()))
+                .map(|s| (s.page.clone(), s.opts.proxy_server.is_some()))
                 .ok_or_else(|| VakError::NotFound(format!("unknown session {id}")))?
         };
-        let (page_arc, _profile) = entry;
-        let mut page = page_arc.lock().await;
+        let mut slot = page_arc.lock().await;
+        if slot.is_none() {
+            self.restore(id, &mut slot).await?;
+        }
 
         // Gate every navigation through the URL policy. `NewTab` with an
         // inline URL is the same class of move as `Navigate` — it must not
@@ -935,6 +1269,25 @@ impl SessionManager {
             }
             _ => {}
         }
+        if let Action::Navigate { url } | Action::NewTab { url: Some(url) } = &action
+            && !own_proxy
+        {
+            self.guard_check(url).await?;
+        }
+
+        // An explicit new tab is new memory: queue for it like an open.
+        let tab_lease = match &action {
+            Action::NewTab { .. } => Some(self.admit(self.gov.cfg.tab_cost_mb, Some(id)).await?),
+            _ => None,
+        };
+        // Page work is CPU-bound; waits only sleep, so they hold no slot.
+        let _working = match &action {
+            Action::WaitForTruthy { .. } | Action::WaitForUrl { .. } => None,
+            _ => Some(self.slot(&self.gov.active, "page work").await?),
+        };
+        let page = slot
+            .as_mut()
+            .ok_or_else(|| VakError::Engine(format!("session {id} has no browser")))?;
 
         // Refresh the activity tick *before* the action runs, so a long
         // action (e.g. wait_for_truthy) cannot be reaped mid-flight by the
@@ -959,165 +1312,198 @@ impl SessionManager {
                 | Action::SetDownloadDir { .. }
         );
 
-        let result = match action {
-            // Handled before the page lock is acquired (re-launches the browser).
-            Action::RotateProxy => unreachable!("RotateProxy returns before the page lock"),
-            Action::Navigate { url } => {
-                let nav = page.navigate(&url).await?;
-                ActionResult::Navigated {
-                    url: nav.url.clone(),
-                    title: nav.title,
+        let closing_tab = matches!(action, Action::CloseTab { .. });
+        let blocks_before = self.guard.get().map(|g| g.block_count());
+        let result: Result<ActionResult> = async {
+            Ok(match action {
+                // Handled before the page lock is acquired (re-launches the browser).
+                Action::RotateProxy => unreachable!("RotateProxy returns before the page lock"),
+                Action::Navigate { url } => {
+                    let nav = page.navigate(&url).await?;
+                    ActionResult::Navigated {
+                        url: nav.url.clone(),
+                        title: nav.title,
+                    }
                 }
-            }
-            Action::Snapshot => ActionResult::Snapshot {
-                snapshot: page.snapshot().await?,
-            },
-            Action::Click { r#ref } => {
-                let out = page.click(&ElementRef(r#ref)).await?;
-                ActionResult::Clicked {
-                    navigated: out.navigated,
-                    url: out.url,
-                    opened_tab: out.opened_tab.map(TabId),
+                Action::Snapshot => ActionResult::Snapshot {
+                    snapshot: page.snapshot().await?,
+                },
+                Action::Click { r#ref } => {
+                    let out = page.click(&ElementRef(r#ref)).await?;
+                    ActionResult::Clicked {
+                        navigated: out.navigated,
+                        url: out.url,
+                        opened_tab: out.opened_tab.map(TabId),
+                    }
                 }
-            }
-            Action::Fill { r#ref, text } => {
-                page.fill(&ElementRef(r#ref), &text).await?;
-                ActionResult::Done
-            }
-            Action::SelectOption { r#ref, value } => ActionResult::Flag {
-                ok: page.select_option(&ElementRef(r#ref), &value).await?,
-            },
-            Action::PressKey { key } => {
-                page.press_key(&key).await?;
-                ActionResult::Done
-            }
-            Action::Scroll { dx, dy } => {
-                page.scroll(dx, dy).await?;
-                ActionResult::Done
-            }
-            Action::EvalText { expression } => ActionResult::Text {
-                text: cap_text(page.eval_text(&expression).await?),
-            },
-            Action::FindByCss { selector } => ActionResult::Elements {
-                refs: page.find_by_css(&selector).await?,
-            },
-            Action::WaitForTruthy {
-                expression,
-                timeout_ms,
-            } => {
-                page.wait_for_truthy(&expression, timeout_ms).await?;
-                ActionResult::Done
-            }
-            Action::WaitForUrl {
-                pattern,
-                timeout_ms,
-            } => {
-                page.wait_for_url(&pattern, timeout_ms).await?;
-                ActionResult::Done
-            }
-            Action::Cookies => ActionResult::Cookies {
-                cookies: page.cookies().await?,
-            },
-            Action::SetCookie { cookie } => {
-                page.set_cookie(&cookie).await?;
-                ActionResult::Done
-            }
-            Action::ClearCookies => {
-                page.clear_cookies().await?;
-                ActionResult::Done
-            }
-            Action::SetDownloadDir { dir } => {
-                page.set_download_dir(std::path::Path::new(&dir)).await?;
-                ActionResult::Done
-            }
-            Action::Screenshot { full_page } => {
-                let png = page.screenshot(full_page).await?;
-                use base64::Engine as _;
-                ActionResult::Image {
-                    png_base64: base64::engine::general_purpose::STANDARD.encode(png),
+                Action::Fill { r#ref, text } => {
+                    page.fill(&ElementRef(r#ref), &text).await?;
+                    ActionResult::Done
                 }
-            }
-            Action::ClickAt { x, y } => {
-                page.click_at(x, y).await?;
-                ActionResult::Done
-            }
-            Action::WebMcpTools => ActionResult::Tools {
-                tools: page.webmcp_tools().await?,
-            },
-            Action::WebMcpInvoke {
-                name,
-                arguments_json,
-            } => ActionResult::Text {
-                text: cap_text(page.webmcp_invoke(&name, &arguments_json).await?),
-            },
+                Action::SelectOption { r#ref, value } => ActionResult::Flag {
+                    ok: page.select_option(&ElementRef(r#ref), &value).await?,
+                },
+                Action::PressKey { key } => {
+                    page.press_key(&key).await?;
+                    ActionResult::Done
+                }
+                Action::Scroll { dx, dy } => {
+                    page.scroll(dx, dy).await?;
+                    ActionResult::Done
+                }
+                Action::EvalText { expression } => ActionResult::Text {
+                    text: cap_text(page.eval_text(&expression).await?),
+                },
+                Action::FindByCss { selector } => ActionResult::Elements {
+                    refs: page.find_by_css(&selector).await?,
+                },
+                Action::WaitForTruthy {
+                    expression,
+                    timeout_ms,
+                } => {
+                    page.wait_for_truthy(&expression, timeout_ms).await?;
+                    ActionResult::Done
+                }
+                Action::WaitForUrl {
+                    pattern,
+                    timeout_ms,
+                } => {
+                    page.wait_for_url(&pattern, timeout_ms).await?;
+                    ActionResult::Done
+                }
+                Action::Cookies => ActionResult::Cookies {
+                    cookies: page.cookies().await?,
+                },
+                Action::SetCookie { cookie } => {
+                    page.set_cookie(&cookie).await?;
+                    ActionResult::Done
+                }
+                Action::ClearCookies => {
+                    page.clear_cookies().await?;
+                    ActionResult::Done
+                }
+                Action::SetDownloadDir { dir } => {
+                    page.set_download_dir(std::path::Path::new(&dir)).await?;
+                    ActionResult::Done
+                }
+                Action::Screenshot { full_page } => {
+                    let png = page.screenshot(full_page).await?;
+                    use base64::Engine as _;
+                    ActionResult::Image {
+                        png_base64: base64::engine::general_purpose::STANDARD.encode(png),
+                    }
+                }
+                Action::ClickAt { x, y } => {
+                    page.click_at(x, y).await?;
+                    ActionResult::Done
+                }
+                Action::WebMcpTools => ActionResult::Tools {
+                    tools: page.webmcp_tools().await?,
+                },
+                Action::WebMcpInvoke {
+                    name,
+                    arguments_json,
+                } => ActionResult::Text {
+                    text: cap_text(page.webmcp_invoke(&name, &arguments_json).await?),
+                },
 
-            Action::Tabs => ActionResult::Tabs {
-                tabs: page.tabs().await?,
-            },
-            Action::NewTab { url } => {
-                let tab = page.new_tab(url.as_deref()).await?;
-                // New tab becomes active; keep the session-level URL shadow
-                // in sync so `list()`/Status report the right page.
-                if let Some(st) = self.sessions.lock().await.get_mut(id) {
-                    st.current_url = tab.url.clone();
+                Action::Tabs => ActionResult::Tabs {
+                    tabs: page.tabs().await?,
+                },
+                Action::NewTab { url } => {
+                    let tab = page.new_tab(url.as_deref()).await?;
+                    // New tab becomes active; keep the session-level URL shadow
+                    // in sync so `list()`/Status report the right page.
+                    if let Some(st) = self.sessions.lock().await.get_mut(id) {
+                        st.current_url = tab.url.clone();
+                    }
+                    ActionResult::TabOpened { tab }
                 }
-                ActionResult::TabOpened { tab }
-            }
-            Action::SwitchTab { tab } => {
-                page.switch_tab(&tab).await?;
-                ActionResult::Done
-            }
-            Action::CloseTab { tab } => ActionResult::Flag {
-                ok: page.close_tab(&tab).await?,
-            },
+                Action::SwitchTab { tab } => {
+                    page.switch_tab(&tab).await?;
+                    ActionResult::Done
+                }
+                Action::CloseTab { tab } => ActionResult::Flag {
+                    ok: page.close_tab(&tab).await?,
+                },
 
-            Action::Back => {
-                let nav = page.back().await?;
-                ActionResult::Navigated {
-                    url: nav.url,
-                    title: nav.title,
+                Action::Back => {
+                    let nav = page.back().await?;
+                    ActionResult::Navigated {
+                        url: nav.url,
+                        title: nav.title,
+                    }
                 }
-            }
-            Action::Forward => {
-                let nav = page.forward().await?;
-                ActionResult::Navigated {
-                    url: nav.url,
-                    title: nav.title,
+                Action::Forward => {
+                    let nav = page.forward().await?;
+                    ActionResult::Navigated {
+                        url: nav.url,
+                        title: nav.title,
+                    }
                 }
-            }
-            Action::Extract { offset, max_chars } => {
-                let window = ExtractWindow {
-                    offset,
-                    max_chars: max_chars.unwrap_or(DEFAULT_EXTRACT_CHARS),
-                };
-                let ex: Extracted = page.extract(window).await?;
-                ActionResult::Text {
-                    text: render_extract(&ex),
+                Action::Extract { offset, max_chars } => {
+                    let window = ExtractWindow {
+                        offset,
+                        max_chars: max_chars.unwrap_or(DEFAULT_EXTRACT_CHARS),
+                    };
+                    let ex: Extracted = page.extract(window).await?;
+                    ActionResult::Text {
+                        text: render_extract(&ex),
+                    }
                 }
-            }
-            Action::Reload => {
-                let nav = page.reload().await?;
-                ActionResult::Navigated {
-                    url: nav.url,
-                    title: nav.title,
+                Action::Reload => {
+                    let nav = page.reload().await?;
+                    ActionResult::Navigated {
+                        url: nav.url,
+                        title: nav.title,
+                    }
                 }
-            }
-            Action::SetFileChooser { r#ref, paths } => {
-                let ok = page.set_file_chooser(&ElementRef::new(&r#ref), &paths).await?;
-                ActionResult::Flag { ok }
-            }
-            Action::Source => {
-                let text = cap_text(page.source().await?);
-                ActionResult::Text { text }
-            }
-            Action::Downloads => {
-                let list = page.downloads().await?;
-                ActionResult::Text {
-                    text: serde_json::to_string(&list)
-                        .unwrap_or_else(|_| "[]".to_string()),
+                Action::SetFileChooser { r#ref, paths } => {
+                    let ok = page
+                        .set_file_chooser(&ElementRef::new(&r#ref), &paths)
+                        .await?;
+                    ActionResult::Flag { ok }
                 }
+                Action::Source => {
+                    let text = cap_text(page.source().await?);
+                    ActionResult::Text { text }
+                }
+                Action::Downloads => {
+                    let list = page.downloads().await?;
+                    ActionResult::Text {
+                        text: serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()),
+                    }
+                }
+            })
+        }
+        .await;
+        let result = result.map_err(|e| self.explain(e))?;
+
+        // Tab memory accounting.
+        let extra_now = self
+            .sessions
+            .lock()
+            .await
+            .get(id)
+            .map_or(0, |s| s.extra_tabs);
+        match &result {
+            ActionResult::TabOpened { .. } => {
+                self.charge_tabs(id, extra_now + 1, tab_lease).await;
             }
-        };
+            ActionResult::Clicked {
+                opened_tab: Some(_),
+                ..
+            } => self.charge_tabs(id, extra_now + 1, None).await,
+            ActionResult::Flag { ok: true } if closing_tab => {
+                self.charge_tabs(id, extra_now.saturating_sub(1), None)
+                    .await;
+            }
+            ActionResult::Tabs { tabs } => {
+                self.charge_tabs(id, tabs.len().saturating_sub(1), None)
+                    .await;
+            }
+            _ => {}
+        }
 
         // Page-driven navigation (link clicks, redirects, history, JS) never
         // passes through `navigate`, so ask the page where it actually is.
@@ -1129,6 +1515,27 @@ impl SessionManager {
             && let Ok(live) = page.eval_text("location.href").await
             && !live.is_empty()
         {
+            // The guard refused something during this action; if it was the
+            // main document (a redirect into a private range), the page now
+            // shows the guard's block page or a browser error page.
+            if let (Some(g), Some(before)) = (self.guard.get(), blocks_before)
+                && g.block_count() > before
+            {
+                let probe = format!(
+                    "location.protocol === 'chrome-error:' || (document.contentType === 'text/plain' && (document.body ? document.body.innerText : '').startsWith({:?}))",
+                    netguard::BLOCK_PAGE_PREFIX
+                );
+                if page.eval_text(&probe).await.is_ok_and(|v| v == "true") {
+                    let why = g
+                        .recent_block(std::time::Duration::from_secs(30))
+                        .unwrap_or_else(|| "private/internal address".into());
+                    let _ = page.navigate("about:blank").await;
+                    if let Some(s) = self.sessions.lock().await.get_mut(id) {
+                        s.current_url = "about:blank".into();
+                    }
+                    return Err(VakError::Policy(format!("private network blocked: {why}")));
+                }
+            }
             if self.policy.restricted()
                 && let Err(e) = self.policy.check(&live)
             {
@@ -1168,6 +1575,7 @@ impl SessionManager {
                 Err(e) => ResponsePayload::Error(e.into()),
             },
             Request::ListSessions => ResponsePayload::Sessions(self.list().await),
+            Request::Status => ResponsePayload::Status(self.status().await),
             Request::Act { session, action } => match self.act(&session, action).await {
                 Ok(result) => ResponsePayload::Result(result),
                 Err(e) => ResponsePayload::Error(e.into()),

@@ -47,7 +47,15 @@ enum Command {
         /// `location.href`. Re-fires page handlers; use only on click-blocking sites.
         #[arg(long)]
         click_recovery: bool,
+        /// Skip images, web fonts and autoplay (default: on for hosts <= 4 GB).
+        #[arg(long, overrides_with = "no_lean")]
+        lean: bool,
+        /// Render images and fonts even on a small host.
+        #[arg(long)]
+        no_lean: bool,
     },
+    /// Host capacity and load: memory budget, queue, CPU slots.
+    Status,
     /// Close a session.
     Close { session: String },
     /// List live sessions on the daemon.
@@ -200,6 +208,8 @@ fn to_request(cmd: Command) -> Result<Request, String> {
             proxies,
             human_timing,
             click_recovery,
+            lean,
+            no_lean,
         } => Request::Open {
             options: SessionOptions {
                 profile: profile.as_ref().map(vakbrowse_core::ProfileId::new),
@@ -210,12 +220,20 @@ fn to_request(cmd: Command) -> Result<Request, String> {
                 proxies,
                 human_timing,
                 click_recovery,
+                lean: if lean {
+                    Some(true)
+                } else if no_lean {
+                    Some(false)
+                } else {
+                    None
+                },
             },
         },
         Command::Close { session } => Request::Close {
             session: SessionId(session),
         },
         Command::Sessions => Request::ListSessions,
+        Command::Status => Request::Status,
         Command::Navigate { session, url } => act(session, Action::Navigate { url }),
         Command::Snapshot { session } => act(session, Action::Snapshot),
         Command::Click { session, r#ref } => act(session, Action::Click { r#ref }),
@@ -296,14 +314,10 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         ),
         Command::RotateProxy { session } => act(session, Action::RotateProxy),
         Command::SetFileChooser {
-            session, r#ref, paths,
-        } => act(
             session,
-            Action::SetFileChooser {
-                r#ref,
-                paths,
-            },
-        ),
+            r#ref,
+            paths,
+        } => act(session, Action::SetFileChooser { r#ref, paths }),
         Command::Source { session } => act(session, Action::Source),
         Command::Downloads { session } => act(session, Action::Downloads),
         Command::Batch { session, actions } => {
@@ -365,7 +379,8 @@ fn render_payload(p: ResponsePayload) -> String {
                         .as_ref()
                         .map(|p| p.0.clone())
                         .unwrap_or_else(|| "-".into());
-                    format!("{} profile={} {}", s.id, profile, s.url)
+                    let z = if s.hibernated { " (hibernated)" } else { "" };
+                    format!("{} profile={} {}{z}", s.id, profile, s.url)
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -377,6 +392,7 @@ fn render_payload(p: ResponsePayload) -> String {
             .map(|(i, a)| format!("[{i}] {}", format_action_result(a.clone())))
             .collect::<Vec<_>>()
             .join("\n"),
+        ResponsePayload::Status(st) => vakbrowse_server::render::status_text(&st),
         ResponsePayload::Error(e) => format!("error: {e}"),
     }
 }

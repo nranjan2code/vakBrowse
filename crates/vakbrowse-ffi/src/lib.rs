@@ -17,7 +17,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use vakbrowse_server::{Policy, Request, SessionManager};
 
@@ -32,9 +32,13 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 fn manager() -> &'static SessionManager {
-    static MANAGER: OnceLock<SessionManager> = OnceLock::new();
+    static MANAGER: OnceLock<Arc<SessionManager>> = OnceLock::new();
     MANAGER.get_or_init(|| {
-        SessionManager::with_policy(Policy::from_env())
+        let m = Arc::new(SessionManager::with_policy(Policy::from_env()));
+        // Idle sessions hibernate (memory freed, state kept) in-process too.
+        let _ctx = runtime().enter();
+        m.spawn_reaper();
+        m
     })
 }
 
