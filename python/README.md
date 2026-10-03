@@ -16,7 +16,8 @@ tree = s.snapshot(sid)            # a11y tree with stable @eN refs
 name_ref = next(e["ref"] for e in tree["elements"]
                 if e["role"] == "textbox" and "name" in e["name"].lower())
 s.fill(sid, name_ref, "Linus")
-print(s.extract(sid))             # main-content text
+print(s.extract(sid))             # main-content text (20k-char window)
+print(s.extract(sid, offset=20000, max_chars=5000))  # next window
 s.close(sid)
 
 # One round-trip for multiple steps (fail-fast):

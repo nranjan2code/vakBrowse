@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use url::Url;
-use vakbrowse_core::{ElementRef, VakError};
+use vakbrowse_core::{ElementRef, ExtractWindow, VakError};
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions};
 
 mod common;
@@ -276,7 +276,7 @@ async fn extract_prefers_prose_over_linkdense_sidebar() {
         .await
         .unwrap();
 
-    let extracted = session.extract().await.unwrap();
+    let extracted = session.extract(ExtractWindow::default()).await.unwrap();
     let text = extracted.text;
     // The real prose must be selected, not the (longer) link-dense sidebar.
     assert!(

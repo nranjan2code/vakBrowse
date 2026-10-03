@@ -137,8 +137,16 @@ class Session:
         """Snapshot the a11y tree; convenience on top of ``act``."""
         return self.act(sid, {"type": "snapshot"})["snapshot"]
 
-    def extract(self, sid: str) -> str:
-        return self.act(sid, {"type": "extract"})["text"]
+    def extract(self, sid: str, offset: int = 0, max_chars: int | None = None) -> str:
+        """Readable main-content text, one window at a time.
+
+        If the text was cut, it ends with ``[truncated: … extract with
+        offset=N for more]``; call again with ``offset=N`` to continue.
+        """
+        action: dict = {"type": "extract", "offset": offset}
+        if max_chars is not None:
+            action["max_chars"] = max_chars
+        return self.act(sid, action)["text"]
 
     def navigate(self, sid: str, url: str) -> dict:
         return self.act(sid, {"type": "navigate", "url": url})

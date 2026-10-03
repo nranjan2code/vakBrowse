@@ -340,9 +340,23 @@ fn tool_definitions_raw() -> Vec<Tool> {
         ),
         Tool::new(
             "browser_extract",
-            "Extract the page's readable main content as text (token-cheap reading; prefer over eval).",
+            "Extract the page's readable main content as text (token-cheap reading; prefer over eval). \
+             Returns up to max_chars (default 20000, max 60000); if cut, a trailing \
+             [truncated: …] note gives the offset to pass for the next window.",
             schema(
-                vec![("session", json!({"type": "string", "description": SESSION}))],
+                vec![
+                    ("session", json!({"type": "string", "description": SESSION})),
+                    (
+                        "offset",
+                        json!({"type": "integer", "minimum": 0,
+                               "description": "Character offset to start from (default 0)."}),
+                    ),
+                    (
+                        "max_chars",
+                        json!({"type": "integer", "minimum": 1, "maximum": 60000,
+                               "description": "Window size in characters (default 20000)."}),
+                    ),
+                ],
                 &["session"],
             ),
         ),
@@ -746,7 +760,12 @@ impl VakMcp {
             },
             "browser_extract" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),
-                action: Action::Extract,
+                action: Action::Extract {
+                    offset: arg(args, "offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                    max_chars: arg(args, "max_chars")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as usize),
+                },
             },
             "browser_back" => Request::Act {
                 session: SessionId(arg_str(args, "session")?),
@@ -1072,6 +1091,36 @@ mod tests {
         // terminate the fenced region early.
         assert_eq!(out.matches(&format!("<<end page-content {id}>>")).count(), 1);
         assert_ne!(id, "0000000000000000");
+    }
+
+    #[test]
+    fn extract_maps_offset_and_max_chars() {
+        let server = VakMcp::default();
+        let args = |v: serde_json::Value| v.as_object().cloned().unwrap();
+        let a = args(json!({"session": "s1"}));
+        let Request::Act { action, .. } = server.map_tool("browser_extract", Some(&a)).unwrap()
+        else {
+            panic!("expected Act");
+        };
+        assert!(matches!(
+            action,
+            Action::Extract {
+                offset: 0,
+                max_chars: None
+            }
+        ));
+        let a = args(json!({"session": "s1", "offset": 20000, "max_chars": 5000}));
+        let Request::Act { action, .. } = server.map_tool("browser_extract", Some(&a)).unwrap()
+        else {
+            panic!("expected Act");
+        };
+        assert!(matches!(
+            action,
+            Action::Extract {
+                offset: 20000,
+                max_chars: Some(5000)
+            }
+        ));
     }
 
     #[test]

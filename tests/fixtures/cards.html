@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Card Layout Fixture</title>
+  <style>.card { border: 1px solid #ccc; } .sr-hidden { display: none; }</style>
+</head>
+<body>
+  <!-- quotes.toscrape.com-style page: no <p>/<article>, all content lives in
+       div/span cards. The only semantic candidate is a tiny promo <section>,
+       which must NOT be picked as the main content. -->
+  <div class="header-box">
+    <h1>Card Wall</h1>
+    <a href="/login">Login</a>
+  </div>
+  <section class="promo">Subscribe today.</section>
+  <div class="cards"></div>
+  <span class="sr-hidden">hidden tracking blurb</span>
+  <nav><a href="/page/2">Next page navigation link</a></nav>
+  <script>
+    // Rendered by script, like the /js/ variant of the real site.
+    const quotes = [
+      ['The world as we have created it is a process of our thinking.', 'Albert Einstein', ['change', 'thinking']],
+      ['It is our choices that show what we truly are.', 'J.K. Rowling', ['choices']],
+      ['There are only two ways to live your life.', 'Albert Einstein', ['life']],
+    ];
+    const host = document.querySelector('.cards');
+    for (const [text, author, tags] of quotes) {
+      const card = document.createElement('div');
+      card.className = 'card quote';
+      card.innerHTML =
+        `<span class="text">“${text}”</span>` +
+        `<span>by <small class="author">${author}</small> <a href="#">(about)</a></span>` +
+        `<div class="tags">Tags: ${tags.map(t => `<a class="tag" href="#">${t}</a>`).join(' ')}</div>`;
+      host.appendChild(card);
+    }
+  </script>
+</body>
+</html>

@@ -172,8 +172,9 @@ Default `cargo build` / `cargo test` do not require it.
   + `ResponsePayload::Results` across every surface, `RotateProxy` (re-launch
   the next endpoint in `SessionOptions.proxies`, **restoring the session
   URL**), `--human-timing` sub-150ms input jitter, and `--proxies a,b`. Test
-  count is now **104 passed / 0 failed / 2 ignored** on macOS, Linux-root, and
-  Linux-uid1000, clippy clean (removed 35 chrome-free DOM-backend tests — the
+  count is now **114 passed / 0 failed / 2 ignored** on macOS (the 104 before
+  the extract card-layout + windowing work were also verified on Linux-root
+  and Linux-uid1000), clippy clean (removed 35 chrome-free DOM-backend tests — the
   `vakbrowse-dom` crate and `tests/dom_backend.rs` — to commit CDP-only).
   New chrome-launching server tests are guarded by
   `browser_lock()` (serialized per test binary) to keep
@@ -349,6 +350,30 @@ playground/
 - `extract` is the token-cheap reading tool: readability-style main-content
   extraction returning title/url/markdown-ish text (20KB from a 500KB
   Wikipedia page). Agents should prefer extract over eval for reading.
+  It walks the **live** DOM (layout-aware `innerText`, `checkVisibility`,
+  computed `display`), not a detached clone: inline runs (text nodes + inline
+  elements) are accumulated and flushed at CSS block boundaries, so
+  card/div-layout pages whose text lives only in `div`/`span` (e.g.
+  quotes.toscrape.com) are read, not dropped; hidden nodes and chrome
+  (`nav/header/footer/aside/form/button`, ARIA landmarks, Wikipedia
+  `[edit]` links) are skipped. If the best semantic candidate scores under
+  25% of `body`'s link-discounted prose (a tiny promo `<section>`), `body` is
+  read instead. Table rows render as one `cell | cell` line (infobox labels
+  stay beside values); rows/cells containing nested tables recurse, so
+  layout tables (HN) give one line per row. Fixture: `tests/fixtures/cards.html`.
+- `extract` is **windowed**, not silently capped: `Action::Extract { offset,
+  max_chars }` (both optional; `{"type":"extract"}` still parses) returns
+  `max_chars` (default 20k = `DEFAULT_EXTRACT_CHARS`, clamped to 60k =
+  `MAX_EXTRACT_CHARS`) starting at char `offset`. The JS returns the full
+  text; `Extracted::windowed` (core, unit-tested) cuts it on a line break —
+  else a space — in the window's back half and sets `total_chars`/`offset`/
+  `next_offset`. Surfaces see a text footer, `[truncated: characters a..b of
+  N; extract with offset=b for more]` or `[end of content: …]` when paging
+  past 0 — before this, `truncated` was dropped on every surface. Exposed as
+  `vak extract s1 --offset N --max-chars M`, `browser_extract {offset,
+  max_chars}`, the REST/UDS/FFI action JSON, and Python
+  `Session.extract(sid, offset=0, max_chars=None)`. Offsets count Unicode
+  chars. The trait method is now `PageOps::extract(ExtractWindow)`.
 - Per-session proxy ships as `SessionOptions.proxy` (`--proxy` on CLI,
   `browser_open {proxy}` in MCP) — the answer to IP-reputation walls.
   Proxy *rotation* across a pool is `Action::RotateProxy`

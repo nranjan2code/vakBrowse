@@ -69,6 +69,15 @@ def test_batch_runs_actions_in_one_roundtrip(session):
     assert results[1]["type"] == "text"
 
 
+def test_extract_windows_and_pages(session):
+    s, sid = session
+    page = s.extract(sid, max_chars=10)
+    assert "[truncated: characters 0.." in page, page
+    nxt = int(page.rsplit("offset=", 1)[1].split()[0])
+    rest = s.extract(sid, offset=nxt)
+    assert "[end of content:" in rest, rest
+
+
 def test_rotate_proxy_without_pool_is_error(session):
     s, sid = session
     with pytest.raises(VakError, match="proxy pool"):

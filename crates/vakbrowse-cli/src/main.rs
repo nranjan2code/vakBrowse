@@ -122,8 +122,17 @@ enum Command {
     Forward { session: String },
     /// Reload the current document.
     Reload { session: String },
-    /// Extract readable main-content text (title + url + body).
-    Extract { session: String },
+    /// Extract readable main-content text (title + url + body), one window
+    /// at a time; a cut window names the --offset to continue from.
+    Extract {
+        session: String,
+        /// Character offset to start from.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Window size in characters (default 20000, max 60000).
+        #[arg(long)]
+        max_chars: Option<usize>,
+    },
     /// List tabs of a session (active first).
     Tabs { session: String },
     /// Open a new tab (becomes active).
@@ -266,7 +275,11 @@ fn to_request(cmd: Command) -> Result<Request, String> {
         Command::Back { session } => act(session, Action::Back),
         Command::Forward { session } => act(session, Action::Forward),
         Command::Reload { session } => act(session, Action::Reload),
-        Command::Extract { session } => act(session, Action::Extract),
+        Command::Extract {
+            session,
+            offset,
+            max_chars,
+        } => act(session, Action::Extract { offset, max_chars }),
         Command::Tabs { session } => act(session, Action::Tabs),
         Command::NewTab { session, url } => act(session, Action::NewTab { url }),
         Command::Switch { session, tab } => act(

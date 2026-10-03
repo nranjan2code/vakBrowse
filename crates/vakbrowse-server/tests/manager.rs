@@ -311,7 +311,13 @@ async fn batch_returns_one_result_per_action() {
     let resp = manager
         .handle(Request::Batch {
             session,
-            actions: vec![Action::Snapshot, Action::Extract],
+            actions: vec![
+                Action::Snapshot,
+                Action::Extract {
+                    offset: 0,
+                    max_chars: None,
+                },
+            ],
         })
         .await
         .unwrap();

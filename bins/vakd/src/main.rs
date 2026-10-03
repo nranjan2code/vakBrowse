@@ -252,7 +252,13 @@ async fn wire_self_test() -> vakbrowse_core::Result<()> {
     );
 
     let extracted = manager
-        .act(&id, Action::Extract)
+        .act(
+            &id,
+            Action::Extract {
+                offset: 0,
+                max_chars: None,
+            },
+        )
         .await
         .map_err(|e| VakError::Engine(format!("wire extract: {e}")))?;
     match extracted {
@@ -264,7 +270,13 @@ async fn wire_self_test() -> vakbrowse_core::Result<()> {
     let batched = manager
         .handle(Request::Batch {
             session: id.clone(),
-            actions: vec![Action::Snapshot, Action::Extract],
+            actions: vec![
+                Action::Snapshot,
+                Action::Extract {
+                    offset: 0,
+                    max_chars: None,
+                },
+            ],
         })
         .await
         .map_err(|e| VakError::Engine(format!("wire batch: {e}")))?;

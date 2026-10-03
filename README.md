@@ -48,7 +48,10 @@ capability once, all five surfaces get it.
   `eval_text` stringification of all JS return types, scroll-into-view for
   below-fold clicks, and a SPA-safe `wait_url` (waits on `location.href`, not
   `readyState`); per-session `--stealth` and `--proxy`; `extract` action
-  returning clean readable article text; tagged releases shipping binaries.
+  returning clean readable article text — including card/div-layout pages
+  whose content lives in `div`/`span` blocks rather than `<p>`/`<article>`,
+  paged with `offset`/`max_chars` (default 20k chars per window; a footer
+  names the offset to continue from); tagged releases shipping binaries.
 - **Throughput & bot-wall resilience (P6+, this cycle)** — `Request::Batch`
   runs a sequence of actions in one round-trip with fail-fast, cutting agent
   latency across all five surfaces (`vak batch`, `browser_batch`,
@@ -62,7 +65,7 @@ capability once, all five surfaces get it.
 - **Interactive Playground UI** — Industrial showcase with unified JSON RPC,
   CDP screenshots, batch studio, console REPL, cookie manager, and tour guide.
 
-104 tests, clippy clean. Hardened against real environments: launch args verified
+114 tests, clippy clean. Hardened against real environments: launch args verified
 against chromiumoxide's double-dash footgun, sandbox auto-fallback for
 root/hardened runners (validated in linux containers as root *and* non-root). `Action::Click`
 now returns a navigation signal (`ActionResult::Clicked { navigated, url }`):

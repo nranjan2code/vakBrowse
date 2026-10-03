@@ -8,8 +8,8 @@ pub use cdp::CdpLauncher;
 
 use std::path::{Path, PathBuf};
 use vakbrowse_core::{
-    Cookie, CookieInput, DownloadInfo, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo,
-    VakError, WebMcpTool,
+    Cookie, CookieInput, DownloadInfo, ElementRef, ExtractWindow, Extracted, Result, Snapshot,
+    TabId, TabInfo, VakError, WebMcpTool,
 };
 
 /// Everything needed to start a browser process.
@@ -63,8 +63,9 @@ impl Default for LaunchOptions {
 pub trait PageOps: Send {
     async fn navigate(&mut self, url: &str) -> Result<Navigated>;
     async fn title(&self) -> Result<String>;
-    /// Clean main-content extraction (readability-style) for LLM consumption.
-    async fn extract(&mut self) -> Result<Extracted>;
+    /// Clean main-content extraction (readability-style) for LLM consumption,
+    /// returning `window` of the full text (page with `next_offset`).
+    async fn extract(&mut self, window: ExtractWindow) -> Result<Extracted>;
     /// History: go back / forward one entry, reload current document.
     async fn back(&mut self) -> Result<Navigated>;
     async fn forward(&mut self) -> Result<Navigated>;

@@ -39,8 +39,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
 use vakbrowse_core::{
-    Cookie, CookieInput, DownloadInfo, ElementRef, Extracted, Result, Snapshot, TabId, TabInfo,
-    VakError, WebMcpTool,
+    Cookie, CookieInput, DownloadInfo, ElementRef, ExtractWindow, Extracted, Result, Snapshot,
+    TabId, TabInfo, VakError, WebMcpTool,
 };
 
 use base64::Engine as _;
@@ -687,10 +687,9 @@ impl CdpSession {
         Ok(())
     }
 
-    async fn extract_inner(&mut self) -> Result<Extracted> {
+    async fn extract_inner(&mut self, window: ExtractWindow) -> Result<Extracted> {
         const EXTRACT_JS: &str = r#"
 (() => {
-  const MAX = 20000;
   // Candidate containers. Score = prose length discounted by link density:
   // link-dense blocks (nav lists, sidebars, link walls) are chrome, not
   // reading material, so a longer but link-heavy block must NOT win over a
@@ -717,43 +716,81 @@ impl CdpSession {
     const s = score(c);
     if (s > bestScore) { bestScore = s; root = c; }
   }
-  // If no candidate has real prose (all link-chrome), root stays body — its
-  // chrome is stripped below, so link-lists/nav still don't leak.
-  // Drop obvious chrome from the chosen root's copy.
-  root = root.cloneNode(true);
-  root.querySelectorAll('script,style,noscript,nav,header,footer,aside,form,' +
-    '[aria-hidden=true],[role=navigation],[role=banner],[role=contentinfo]')
-    .forEach(n => n.remove());
+  // Card/div-layout pages often have no semantic container at all, or only a
+  // small one (a promo <section>) beside the real content. If the winner
+  // holds a small fraction of the page's prose, read the whole body instead —
+  // its chrome is skipped below, so nav/link-lists still don't leak.
+  if (root !== document.body && bestScore < 0.25 * score(document.body)) {
+    root = document.body;
+  }
+
+  // Walk the LIVE tree (not a detached clone) so innerText and computed
+  // display/visibility are layout-aware: hidden nodes are skipped, and CSS
+  // block boxes split lines even when the markup is all div/span.
+  const CHROME = 'script,style,noscript,template,nav,header,footer,aside,form,' +
+    'button,[aria-hidden=true],[role=navigation],[role=banner],' +
+    '[role=contentinfo],.mw-editsection';
+  const LEAF = new Set(['p','li','blockquote','pre','td','th','dt','dd',
+    'figcaption','caption']);
+  const NESTED = 'table,h1,h2,h3,h4';
+  const HAS_BLOCK = 'div,p,li,ul,ol,dl,table,section,article,main,' +
+    'blockquote,pre,figure,h1,h2,h3,h4,h5,h6';
+  const shown = (el) => !el.checkVisibility ||
+    el.checkVisibility({ visibilityProperty: true });
 
   const lines = [];
   const push = (t) => { const x = t.replace(/\s+/g, ' ').trim(); if (x) lines.push(x); };
+  // Inline run (text nodes + inline elements) accumulated until the next
+  // block boundary, so `<div><span>quote</span> by <small>A</small></div>`
+  // reads as one line instead of being dropped.
+  let run = '';
+  const flush = () => { push(run); run = ''; };
   const walk = (node) => {
-    for (const child of node.children || []) {
-      const tag = child.tagName ? child.tagName.toLowerCase() : '';
-      if (['p','li','blockquote','pre','td','figcaption'].includes(tag)) {
-        const headingInside = child.querySelector && child.querySelector('h1,h2,h3,h4');
-        if (headingInside) walk(child);
-        else push(child.innerText);
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) { run += child.data; continue; }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      if (child.matches(CHROME) || !shown(child)) continue;
+      const tag = child.tagName.toLowerCase();
+      if (tag === 'br') {
+        flush();
       } else if (/^h[1-6]$/.test(tag)) {
+        flush();
         lines.push('');
         lines.push('#'.repeat(+tag[1]) + ' ' + child.innerText.trim());
         lines.push('');
-      } else if (tag === 'br') {
-        continue;
+      } else if (tag === 'tr' && !child.querySelector(NESTED)) {
+        // One line per row (`Developer | The Rust Team`) keeps infobox labels
+        // next to their values; layout tables recurse via NESTED instead.
+        flush();
+        push(Array.from(child.children)
+          .filter(c => !c.matches(CHROME) && shown(c))
+          .map(c => c.innerText.replace(/\s+/g, ' ').trim())
+          .filter(Boolean).join(' | '));
+      } else if (LEAF.has(tag) && !child.querySelector(NESTED)) {
+        flush();
+        push(child.innerText);
       } else {
-        walk(child);
+        const display = getComputedStyle(child).display;
+        if (display === 'contents') {
+          walk(child);
+        } else if (!display.startsWith('inline') || child.querySelector(HAS_BLOCK)) {
+          flush();
+          walk(child);
+          flush();
+        } else {
+          // innerText is undefined on SVG/MathML; their text is not prose.
+          run += child.innerText ?? '';
+        }
       }
     }
   };
   walk(root);
-  let text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  let truncated = false;
-  if (text.length > MAX) { text = text.slice(0, MAX); truncated = true; }
+  flush();
+  // Full text; the requested window is cut in Rust (Extracted::windowed).
   return JSON.stringify({
     title: document.title,
     url: location.href,
-    text: text,
-    truncated: truncated
+    text: lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
   });
 })()"#;
 
@@ -763,7 +800,17 @@ impl CdpSession {
                 .map_err(|e| VakError::Protocol(format!("extract shape: {e}")))?,
             other => other,
         };
-        serde_json::from_value(parsed).map_err(|e| VakError::Protocol(format!("extract: {e}")))
+        #[derive(serde::Deserialize)]
+        struct Full {
+            title: String,
+            url: String,
+            text: String,
+        }
+        let full: Full = serde_json::from_value(parsed)
+            .map_err(|e| VakError::Protocol(format!("extract: {e}")))?;
+        Ok(Extracted::windowed(
+            full.title, full.url, &full.text, window,
+        ))
     }
 
     async fn history_go(&mut self, expr: &str) -> Result<Navigated> {
@@ -1503,8 +1550,8 @@ impl PageOps for CdpSession {
         })
     }
 
-    async fn extract(&mut self) -> Result<Extracted> {
-        self.extract_inner().await
+    async fn extract(&mut self, window: ExtractWindow) -> Result<Extracted> {
+        self.extract_inner(window).await
     }
 
     async fn back(&mut self) -> Result<Navigated> {

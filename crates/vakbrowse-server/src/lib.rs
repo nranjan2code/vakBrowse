@@ -32,6 +32,24 @@ fn cap_text(mut text: String) -> String {
     text
 }
 
+/// `extract` as agent-facing text. The footer is the only way a text-only
+/// surface (MCP, CLI) learns the content was cut and where to resume.
+fn render_extract(ex: &Extracted) -> String {
+    let mut text = format!("{}\n{}\n\n{}", ex.title, ex.url, ex.text);
+    match ex.next_offset {
+        Some(next) => text.push_str(&format!(
+            "\n\n[truncated: characters {}..{next} of {}; extract with offset={next} for more]",
+            ex.offset, ex.total_chars
+        )),
+        None if ex.offset > 0 => text.push_str(&format!(
+            "\n\n[end of content: characters {}..{} of {}]",
+            ex.offset, ex.total_chars, ex.total_chars
+        )),
+        None => {}
+    }
+    text
+}
+
 pub mod render;
 #[cfg(unix)]
 pub mod uds;
@@ -44,8 +62,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vakbrowse_core::{
-    Cookie, CookieInput, ElementRef, Extracted, ProfileId, Result, SessionId, Snapshot, TabId,
-    TabInfo, VakError, WebMcpTool,
+    Cookie, CookieInput, DEFAULT_EXTRACT_CHARS, ElementRef, ExtractWindow, Extracted, ProfileId,
+    Result, SessionId, Snapshot, TabId, TabInfo, VakError, WebMcpTool,
 };
 use vakbrowse_engine::{CdpLauncher, EngineLauncher, LaunchOptions, Navigated, PageOps};
 
@@ -200,8 +218,16 @@ pub enum Action {
     Back,
     Forward,
     Reload,
-    /// Readable main-content extraction (title + markdown-ish text).
-    Extract,
+    /// Readable main-content extraction (title + markdown-ish text), one
+    /// window at a time: `offset` (chars, default 0) and `max_chars`
+    /// (default 20k, max 60k). A cut window ends with a footer naming the
+    /// `offset` to continue from. `{"type":"extract"}` stays valid.
+    Extract {
+        #[serde(default)]
+        offset: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chars: Option<usize>,
+    },
 
     Tabs,
     NewTab {
@@ -926,7 +952,7 @@ impl SessionManager {
                 | Action::Source
                 | Action::Downloads
                 | Action::WebMcpTools
-                | Action::Extract
+                | Action::Extract { .. }
                 | Action::FindByCss { .. }
                 | Action::SetCookie { .. }
                 | Action::ClearCookies
@@ -1059,10 +1085,14 @@ impl SessionManager {
                     title: nav.title,
                 }
             }
-            Action::Extract => {
-                let ex: Extracted = page.extract().await?;
+            Action::Extract { offset, max_chars } => {
+                let window = ExtractWindow {
+                    offset,
+                    max_chars: max_chars.unwrap_or(DEFAULT_EXTRACT_CHARS),
+                };
+                let ex: Extracted = page.extract(window).await?;
                 ActionResult::Text {
-                    text: format!("{}\n{}\n\n{}", ex.title, ex.url, ex.text),
+                    text: render_extract(&ex),
                 }
             }
             Action::Reload => {
@@ -1276,6 +1306,44 @@ mod types_tests {
         assert!(p.check("https://intranet.example/x").is_ok());
         assert!(p.check("https://evil.example/x").is_err());
         assert!(Policy::default().check("https://anything").is_ok());
+    }
+
+    #[test]
+    fn extract_action_wire_shape_is_backward_compatible() {
+        let a: Action = serde_json::from_str(r#"{"type":"extract"}"#).unwrap();
+        assert!(matches!(
+            a,
+            Action::Extract {
+                offset: 0,
+                max_chars: None
+            }
+        ));
+        let a: Action =
+            serde_json::from_str(r#"{"type":"extract","offset":500,"max_chars":1000}"#).unwrap();
+        assert!(matches!(
+            a,
+            Action::Extract {
+                offset: 500,
+                max_chars: Some(1000)
+            }
+        ));
+    }
+
+    #[test]
+    fn render_extract_footer_names_resume_offset() {
+        let w = |offset, max_chars| ExtractWindow { offset, max_chars };
+        let body = "one two\nthree four\nfive six";
+        let ex = Extracted::windowed("T".into(), "u".into(), body, w(0, 12));
+        let out = render_extract(&ex);
+        assert!(out.starts_with("T\nu\n\none two"), "{out}");
+        assert!(
+            out.ends_with("[truncated: characters 0..8 of 27; extract with offset=8 for more]"),
+            "{out}"
+        );
+        let ex = Extracted::windowed("T".into(), "u".into(), body, w(8, 100));
+        assert!(render_extract(&ex).ends_with("[end of content: characters 8..27 of 27]"));
+        let ex = Extracted::windowed("T".into(), "u".into(), body, w(0, 100));
+        assert_eq!(render_extract(&ex), format!("T\nu\n\n{body}"));
     }
 
     #[test]
